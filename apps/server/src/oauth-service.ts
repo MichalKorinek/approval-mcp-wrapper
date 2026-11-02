@@ -67,6 +67,16 @@ export class OAuthError extends Error {
   }
 }
 
+export interface OAuthRefreshDiagnostic {
+  event: 'oauth.refresh';
+  timestamp: string;
+  outcome: 'issued' | 'rejected';
+  reason?: 'grant_expired' | 'grant_inactive' | 'binding_mismatch' | 'token_expired' | 'replay_detected';
+  grantId?: string;
+  agentId?: string;
+  grantExpiresAt?: string;
+}
+
 function hash(value: string): string {
   return createHash('sha256').update(`approval-mcp:oauth:${value}`).digest('hex');
 }
@@ -105,6 +115,7 @@ export class OAuthService {
   readonly #state: ConfigStateStore;
   readonly #now: () => Date;
   readonly #originByHost: ReadonlyMap<string, string>;
+  readonly #onRefreshDiagnostic: ((event: OAuthRefreshDiagnostic) => void) | undefined;
   #queue: Promise<void> = Promise.resolve();
 
   constructor(
@@ -112,11 +123,13 @@ export class OAuthService {
     publicOrigin: string,
     now: () => Date = () => new Date(),
     origins: readonly string[] = [publicOrigin],
+    onRefreshDiagnostic?: (event: OAuthRefreshDiagnostic) => void,
   ) {
     this.#state = state;
     this.issuer = publicOrigin;
     this.resource = `${publicOrigin}/mcp`;
     this.#now = now;
+    this.#onRefreshDiagnostic = onRefreshDiagnostic;
     this.#originByHost = new Map(origins.map((origin) => [new URL(origin).host.toLowerCase(), origin]));
     if (!this.#originByHost.has(new URL(publicOrigin).host.toLowerCase())) {
       throw new Error('The passkey origin must be an allowed OAuth origin');
@@ -136,6 +149,14 @@ export class OAuthService {
     const result = this.#queue.then(operation);
     this.#queue = result.then(() => undefined, () => undefined);
     return result;
+  }
+
+  #reportRefresh(event: Omit<OAuthRefreshDiagnostic, 'event' | 'timestamp'>): void {
+    try {
+      this.#onRefreshDiagnostic?.({ event: 'oauth.refresh', timestamp: this.#now().toISOString(), ...event });
+    } catch {
+      // Diagnostics must never change the result of a token refresh.
+    }
   }
 
   async registerClient(name: string, redirectUris: readonly string[], issuer = this.issuer): Promise<OAuthClient> {
@@ -335,17 +356,41 @@ export class OAuthService {
     return this.#serialize(async () => {
       const key = hash(input.refreshToken);
       const token = this.#state.read((state) => record<OAuthToken>(state.oauthTokens[key]));
-      if (token === undefined || token.kind !== 'refresh') throw new OAuthError('invalid_grant');
-      const grant = this.#activeGrant(token.grantId);
-      if (grant === undefined || grant.clientId !== input.clientId ||
-        (grant.issuer ?? this.issuer) !== (input.issuer ?? this.issuer) ||
-        input.resource !== (grant.resource ?? this.resource) ||
-        token.expiresAt <= this.#now().toISOString()) throw new OAuthError('invalid_grant');
-      if (token.usedAt !== undefined) {
-        await this.#state.mutate(upsert('oauthGrants', grant.id, { ...grant, revokedAt: this.#now().toISOString() }));
+      if (token === undefined || token.kind !== 'refresh') {
+        // Unknown tokens are unauthenticated input; do not allow them to flood diagnostics.
         throw new OAuthError('invalid_grant');
       }
-      return this.#issue(grant, [upsert('oauthTokens', key, { ...token, usedAt: this.#now().toISOString() })]);
+      const grant = this.#activeGrant(token.grantId);
+      if (grant === undefined) {
+        const stored = this.#state.read((state) => record<OAuthGrant>(state.oauthGrants[token.grantId]));
+        this.#reportRefresh({
+          outcome: 'rejected',
+          reason: stored !== undefined && stored.expiresAt <= this.#now().toISOString()
+            ? 'grant_expired' : 'grant_inactive',
+          grantId: token.grantId,
+          ...(stored === undefined ? {} : { agentId: stored.clientTokenId }),
+        });
+        throw new OAuthError('invalid_grant');
+      }
+      const identity = { grantId: grant.id, agentId: grant.clientTokenId };
+      if (grant.clientId !== input.clientId ||
+        (grant.issuer ?? this.issuer) !== (input.issuer ?? this.issuer) ||
+        input.resource !== (grant.resource ?? this.resource)) {
+        this.#reportRefresh({ outcome: 'rejected', reason: 'binding_mismatch', ...identity });
+        throw new OAuthError('invalid_grant');
+      }
+      if (token.expiresAt <= this.#now().toISOString()) {
+        this.#reportRefresh({ outcome: 'rejected', reason: 'token_expired', ...identity });
+        throw new OAuthError('invalid_grant');
+      }
+      if (token.usedAt !== undefined) {
+        await this.#state.mutate(upsert('oauthGrants', grant.id, { ...grant, revokedAt: this.#now().toISOString() }));
+        this.#reportRefresh({ outcome: 'rejected', reason: 'replay_detected', ...identity });
+        throw new OAuthError('invalid_grant');
+      }
+      const issued = await this.#issue(grant, [upsert('oauthTokens', key, { ...token, usedAt: this.#now().toISOString() })]);
+      this.#reportRefresh({ outcome: 'issued', ...identity, grantExpiresAt: grant.expiresAt });
+      return issued;
     });
   }
 

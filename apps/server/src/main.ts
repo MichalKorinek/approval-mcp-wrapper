@@ -84,7 +84,13 @@ const journal = await createCallJournal(
   }),
 );
 const sessions = new SessionService(new StateSessionRepository(stateStore));
-const oauth = new OAuthService(stateStore, config.expectedOrigin, () => new Date(), config.oauthOrigins);
+const oauth = new OAuthService(
+  stateStore,
+  config.expectedOrigin,
+  () => new Date(),
+  config.oauthOrigins,
+  (event) => console.info(JSON.stringify(event)),
+);
 const credentialVault = new CredentialVault(config.masterKey);
 const pushNotifications = await PushNotificationService.create({
   state: stateStore,

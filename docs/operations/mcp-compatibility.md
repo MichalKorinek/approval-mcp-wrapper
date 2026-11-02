@@ -35,6 +35,16 @@ obtains a token; MCP HTTP requests still carry a short-lived
 `Authorization: Bearer` access token. Individual tool approvals continue to
 apply to the selected profile.
 
+The server writes one structured `oauth.refresh` line to container logs for
+each refresh attempt with a recognized token. Unknown tokens are not logged to
+avoid log flooding. Each line records the outcome, a reason for rejection, the
+grant and agent IDs when known, and the grant expiry after a successful refresh.
+It never logs access or refresh token values. A successful refresh followed by
+`replay_detected` for the same grant indicates that an already-used refresh
+token was submitted again; `grant_expired` means the approved access lifetime
+ended. The replay protection remains active and requires a new authorization
+after a detected replay.
+
 The callback must be reachable by the browser that completes the sign-in.
 `http://localhost` and other loopback callback URLs refer to that browser's
 machine, which matters if the sandbox runs on another host. HTTPS callbacks

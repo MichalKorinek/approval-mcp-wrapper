@@ -7,17 +7,17 @@ import type { JsonValue, Profile, ProfileId } from '@approval-mcp/contracts';
 import { createConfigStateStore } from '@approval-mcp/state-store';
 import { describe, expect, it } from 'vitest';
 
-import { OAuthService } from './oauth-service.js';
+import { OAuthService, type OAuthRefreshDiagnostic } from './oauth-service.js';
 
 const origin = 'https://approval.example.test';
 const redirectUri = 'http://127.0.0.1:45678/callback';
 const verifier = 'a'.repeat(43);
 const challenge = createHash('sha256').update(verifier).digest('base64url');
 
-async function fixture() {
+async function fixture(onRefreshDiagnostic?: (event: OAuthRefreshDiagnostic) => void) {
   const state = await createConfigStateStore(await mkdtemp(join(tmpdir(), 'approval-oauth-')));
   let clock = new Date('2026-10-21T12:00:00.000Z');
-  const oauth = new OAuthService(state, origin, () => clock);
+  const oauth = new OAuthService(state, origin, () => clock, [origin], onRefreshDiagnostic);
   const profile: Profile = {
     id: 'test-profile' as ProfileId, name: 'Private sandbox', isDefault: false,
     approvalTimeoutSeconds: 60, toolCallTimeoutSeconds: 60,
@@ -61,19 +61,52 @@ describe('OAuth authorization code and PKCE', () => {
   });
 
   it('rotates refresh tokens and revokes the grant on replay', async () => {
-    const { state, oauth, profile, client, requestId } = await fixture();
+    const diagnostics: OAuthRefreshDiagnostic[] = [];
+    const { state, oauth, profile, client, requestId } = await fixture((event) => diagnostics.push(event));
     const code = new URL(await oauth.approve(requestId, profile.id, 3600, 'admin')).searchParams.get('code')!;
     const initial = await oauth.exchangeCode({ code, clientId: client.id, redirectUri, resource: `${origin}/mcp`, codeVerifier: verifier });
     await expect(oauth.refresh({ refreshToken: initial.refresh_token!, clientId: client.id,
       resource: `${origin}/mcp`, issuer: 'https://other.example.test' }))
       .rejects.toMatchObject({ code: 'invalid_grant' });
+    expect(diagnostics.at(-1)).toMatchObject({ event: 'oauth.refresh', outcome: 'rejected', reason: 'binding_mismatch' });
     expect(oauth.authenticate(initial.access_token, 'https://other.example.test')).toBeUndefined();
     const renewed = await oauth.refresh({ refreshToken: initial.refresh_token!, clientId: client.id, resource: `${origin}/mcp` });
     expect(renewed.refresh_token).not.toBe(initial.refresh_token);
+    expect(diagnostics.at(-1)).toMatchObject({ event: 'oauth.refresh', outcome: 'issued', grantExpiresAt: '2026-10-21T13:00:00.000Z' });
     expect(oauth.authenticate(renewed.access_token)).toBeDefined();
     await expect(oauth.refresh({ refreshToken: initial.refresh_token!, clientId: client.id, resource: `${origin}/mcp` }))
       .rejects.toMatchObject({ code: 'invalid_grant' });
+    expect(diagnostics.at(-1)).toMatchObject({ event: 'oauth.refresh', outcome: 'rejected', reason: 'replay_detected' });
+    expect(diagnostics.at(-1)?.grantId).toBe(diagnostics.at(-2)?.grantId);
+    expect(JSON.stringify(diagnostics)).not.toContain(initial.refresh_token!);
+    expect(JSON.stringify(diagnostics)).not.toContain(renewed.refresh_token!);
+    expect(JSON.stringify(diagnostics)).not.toContain(initial.access_token);
     expect(oauth.authenticate(renewed.access_token)).toBeUndefined();
+    await state.close();
+  });
+
+  it('ignores unknown tokens and identifies expired grants without logging tokens', async () => {
+    const diagnostics: OAuthRefreshDiagnostic[] = [];
+    const { state, oauth, profile, client, requestId, advance } = await fixture((event) => diagnostics.push(event));
+    await expect(oauth.refresh({ refreshToken: 'not-a-token', clientId: client.id, resource: `${origin}/mcp` }))
+      .rejects.toMatchObject({ code: 'invalid_grant' });
+    expect(diagnostics).toHaveLength(0);
+    const code = new URL(await oauth.approve(requestId, profile.id, 3600, 'admin')).searchParams.get('code')!;
+    const initial = await oauth.exchangeCode({ code, clientId: client.id, redirectUri, resource: `${origin}/mcp`, codeVerifier: verifier });
+    advance(3600_001);
+    await expect(oauth.refresh({ refreshToken: initial.refresh_token!, clientId: client.id, resource: `${origin}/mcp` }))
+      .rejects.toMatchObject({ code: 'invalid_grant' });
+    expect(diagnostics.at(-1)).toMatchObject({ outcome: 'rejected', reason: 'grant_expired' });
+    expect(JSON.stringify(diagnostics)).not.toContain(initial.refresh_token!);
+    await state.close();
+  });
+
+  it('does not let a failing diagnostic sink interrupt refresh', async () => {
+    const { state, oauth, profile, client, requestId } = await fixture(() => { throw new Error('logging failed'); });
+    const code = new URL(await oauth.approve(requestId, profile.id, 3600, 'admin')).searchParams.get('code')!;
+    const initial = await oauth.exchangeCode({ code, clientId: client.id, redirectUri, resource: `${origin}/mcp`, codeVerifier: verifier });
+    const renewed = await oauth.refresh({ refreshToken: initial.refresh_token!, clientId: client.id, resource: `${origin}/mcp` });
+    expect(oauth.authenticate(renewed.access_token)).toBeDefined();
     await state.close();
   });
 
