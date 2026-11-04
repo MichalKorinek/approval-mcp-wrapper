@@ -7,6 +7,7 @@ import type {
   UpstreamId,
 } from '@approval-mcp/contracts';
 import { describe, expect, it } from 'vitest';
+import { grantMatches } from '@approval-mcp/policy';
 
 import {
   ApprovalConflictError,
@@ -151,6 +152,84 @@ describe('ApprovalOrchestrator', () => {
         },
       },
     });
+  });
+
+  it.each(['plugin', 'generic', undefined] as const)(
+    'creates an unscoped hour grant for a %s presentation',
+    async (source) => {
+      const repository = new InMemoryApprovalRepository();
+      const now = new Date();
+      const orchestrator = new ApprovalOrchestrator(repository, () => now);
+      const request = input();
+      if (source !== undefined) {
+        request.presentation = {
+          source,
+          title: { key: 'title', fallback: { en: 'Send message' } },
+          sections: [],
+          proposedScopes: [],
+        };
+      }
+      const waiting = orchestrator.request(request, new AbortController().signal);
+      const id = await pendingId(repository);
+      const expiresAt = new Date(now.getTime() + 60 * 60_000).toISOString();
+      await orchestrator.decide(id, { action: 'allow_until', expiresAt }, actor, request.requestHash);
+      const outcome = await waiting;
+      if (outcome.status !== 'approved') throw new Error('Expected approval');
+      const grant = outcome.grant;
+      expect(grant.predicates).toEqual([]);
+      expect(grant.expiresAt).toBe(expiresAt);
+      expect(grant).not.toHaveProperty('callId');
+      expect(grant).not.toHaveProperty('requestHash');
+      expect((await repository.find(id))?.grant).toEqual(grant);
+
+      const nextCall = {
+        clientTokenId: request.clientTokenId,
+        upstreamId: request.upstreamId,
+        toolName: request.toolName,
+        normalizationVersion: request.normalizationVersion,
+        context: { groupId: 'different-chat', message: 'different content' },
+        callId: 'next-call',
+        requestHash: 'different-hash',
+        now: now.toISOString(),
+      };
+      expect(grantMatches(grant, nextCall)).toBe(true);
+      for (const overrides of [
+        { clientTokenId: 'another-agent' },
+        { upstreamId: 'another-upstream' },
+        { toolName: 'another-tool' },
+        { normalizationVersion: 2 },
+        { now: expiresAt },
+        { now: new Date(Date.parse(expiresAt) + 1_000).toISOString() },
+      ]) {
+        expect(grantMatches(grant, { ...nextCall, ...overrides })).toBe(false);
+      }
+      expect(grantMatches({ ...grant, revokedAt: now.toISOString() }, nextCall)).toBe(false);
+    },
+  );
+
+  it('rejects permanent, invalid and overlong unscoped grants without closing approval', async () => {
+    const repository = new InMemoryApprovalRepository();
+    const now = new Date();
+    const orchestrator = new ApprovalOrchestrator(repository, () => now);
+    const controller = new AbortController();
+    const request = input();
+    const waiting = orchestrator.request(request, controller.signal);
+    const id = await pendingId(repository);
+
+    await expect(orchestrator.decide(id, { action: 'allow_forever' }, actor, request.requestHash))
+      .rejects.toThrow('constrained scope');
+    for (const expiresAt of [
+      'invalid-date',
+      now.toISOString(),
+      new Date(now.getTime() + 2 * 60 * 60_000).toISOString(),
+    ]) {
+      await expect(orchestrator.decide(id, { action: 'allow_until', expiresAt }, actor, request.requestHash))
+        .rejects.toBeInstanceOf(ApprovalConflictError);
+    }
+    expect((await repository.find(id))?.approval.status).toBe('pending');
+    expect((await repository.find(id))?.grant).toBeUndefined();
+    controller.abort();
+    await waiting;
   });
 
   it('rejects a reusable grant with an unknown plugin scope', async () => {

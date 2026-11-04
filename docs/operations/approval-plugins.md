@@ -19,4 +19,13 @@ Presentation plugins do not change profile policy or automatically require appro
 
 For iMCP `events_delete`, the server performs a read-only `events_fetch` lookup in a bounded time window (around the requested occurrence, or from 30 days ago through one year ahead when no start is supplied). Only an exact event identifier and, when supplied, matching occurrence may provide the visible event title and calendar. The verified occurrence end is shown only when `start` was supplied; without it, the card warns that a recurring occurrence cannot be verified. If the lookup fails or finds no exact match, the card explicitly marks the event as unidentified. The complete identifier remains expandable and the original arguments stay in the technical section. The deletion span is always shown, including its `thisEvent` default. Older journal entries retain the presentation captured when they were created; the lookup does not rewrite history.
 
+The approval dialog also offers **Whole tool (any arguments)**. Selecting it
+enables **Allow for 1 hour**, even when a plugin proposes no reusable scope.
+This grant has no argument predicates and applies to the same agent, upstream
+and tool until its expiry; it can be revoked in **Access**. Other chats,
+recipients and argument values therefore do not prompt again during that hour.
+Explicit denies and profile tool visibility still apply. Tool-wide approval
+cannot be made permanent through this option. Existing plugin scopes remain
+available with their own duration restrictions.
+
 The catalog was checked against the live MCP endpoint on 2026-10-05. If an upstream adds or renames tools, update the corresponding plugin definition and its tests before relying on specialized presentation for the new operation.

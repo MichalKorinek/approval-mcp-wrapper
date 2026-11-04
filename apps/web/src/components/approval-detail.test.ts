@@ -6,7 +6,7 @@ import { I18nProvider } from '../i18n/i18n.js';
 import { ApprovalDetail } from './approval-detail.js';
 
 describe('ApprovalDetail', () => {
-  it('keeps destructive plugin calls one-time while preserving deny', () => {
+  it('defaults destructive calls to one-time approval and offers explicit tool-wide selection', () => {
     const html = renderToStaticMarkup(
       createElement(
         I18nProvider,
@@ -40,6 +40,7 @@ describe('ApprovalDetail', () => {
     expect(html).toContain('Reason for denial (optional)');
     expect(html).toContain('<textarea');
     expect(html).toContain('Allow once');
+    expect(html).toContain('Whole tool (any arguments)');
     expect(html).not.toContain('Allow for 1 hour');
     expect(html).not.toContain('Always allow');
   });

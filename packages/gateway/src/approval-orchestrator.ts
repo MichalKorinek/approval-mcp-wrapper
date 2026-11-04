@@ -289,11 +289,16 @@ export class ApprovalOrchestrator {
     actor: AdminId,
     now: string,
   ): Grant {
-    const expiresAt =
-      decision.action === 'allow_until' ? decision.expiresAt : undefined;
-    if (expiresAt !== undefined && expiresAt <= now) {
-      throw new ApprovalConflictError('Grant expiry must be in the future');
+    let expiresAt: string | undefined;
+    if (decision.action === 'allow_until') {
+      const expiryTime = Date.parse(decision.expiresAt);
+      if (!Number.isFinite(expiryTime) || expiryTime <= Date.parse(now)) {
+        throw new ApprovalConflictError('Grant expiry must be a valid future date');
+      }
+      expiresAt = new Date(expiryTime).toISOString();
     }
+    const toolWide = decision.action === 'allow_until' &&
+      decision.scopeId === undefined && decision.predicate === undefined;
     const selectedScope =
       decision.action === 'allow_once'
         ? undefined
@@ -310,13 +315,13 @@ export class ApprovalOrchestrator {
       );
     }
     if (
-      selectedScope !== undefined &&
+      (selectedScope !== undefined || toolWide) &&
       decision.action === 'allow_until' &&
-      new Date(decision.expiresAt).getTime() >
+      expiresAt !== undefined && Date.parse(expiresAt) >
         new Date(now).getTime() + 60 * 60_000 + 1_000
     ) {
       throw new ApprovalConflictError(
-        'Plugin hour grant cannot exceed one hour',
+        'Hour grant cannot exceed one hour',
       );
     }
     const predicates =
@@ -327,7 +332,7 @@ export class ApprovalOrchestrator {
             ? []
             : [decision.predicate]
           : [...selectedScope.predicates];
-    if (decision.action !== 'allow_once' && predicates.length === 0) {
+    if (decision.action !== 'allow_once' && predicates.length === 0 && !toolWide) {
       throw new ApprovalConflictError(
         'Reusable grant requires a constrained scope',
       );

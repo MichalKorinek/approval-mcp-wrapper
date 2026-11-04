@@ -69,6 +69,7 @@ describe('active grants UI', () => {
     expect(html).toContain('Unknown or removed upstream');
     expect(html).not.toContain('private-token-id');
     expect(html).not.toContain('private-upstream-id');
+    expect(html).toContain('Whole tool (any arguments)');
   });
 
   it('shows the plugin title and human-readable scope before predicates', () => {

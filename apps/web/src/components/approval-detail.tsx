@@ -36,6 +36,7 @@ export function ApprovalDetail({
   const [error, setError] = useState(false);
   const [conditionOpen, setConditionOpen] = useState(false);
   const [denialReason, setDenialReason] = useState('');
+  const [toolWide, setToolWide] = useState(false);
   const [selectedScopeId, setSelectedScopeId] = useState(
     approval.presentation?.proposedScopes[0]?.id,
   );
@@ -44,13 +45,19 @@ export function ApprovalDetail({
   );
   const hasPluginPresentation = approval.presentation?.source === 'plugin';
   const allowsHour =
-    !hasPluginPresentation ||
+    toolWide || !hasPluginPresentation ||
     (selectedScope !== undefined &&
       (selectedScope.durations ?? ['hour', 'forever']).includes('hour'));
   const allowsForever =
-    !hasPluginPresentation ||
-    (selectedScope !== undefined &&
-      (selectedScope.durations ?? ['hour', 'forever']).includes('forever'));
+    !toolWide &&
+    (!hasPluginPresentation ||
+      (selectedScope !== undefined &&
+        (selectedScope.durations ?? ['hour', 'forever']).includes('forever')));
+  const grantScope = toolWide
+    ? {}
+    : selectedScopeId === undefined
+      ? { predicate }
+      : { scopeId: selectedScopeId };
   const panelRef = useRef<HTMLElement>(null);
   useEffect(() => {
     const previous = document.activeElement instanceof HTMLElement ? document.activeElement : undefined;
@@ -114,17 +121,57 @@ export function ApprovalDetail({
         <div><dt>{t('approval.received')}</dt><dd>{formatDate(approval.createdAt)}</dd></div>
       </dl>
       {approval.presentation === undefined ? <><h3>{t('approval.arguments')}</h3><pre>{JSON.stringify(approval.arguments, null, 2)}</pre></> : <CallPresentation presentation={approval.presentation} />}
-      {hasPluginPresentation && approval.presentation !== undefined && approval.presentation.proposedScopes.length > 0 ? (
-        <fieldset className="scope-options">
-          <legend>{t('approval.reusableScope')}</legend>
-          {approval.presentation.proposedScopes.map((scope) => (
-            <label key={scope.id}>
-              <input type="radio" name="scope" checked={selectedScopeId === scope.id} onChange={() => setSelectedScopeId(scope.id)} />
-              {localizedMessage(scope.label, locale)}
-            </label>
-          ))}
-        </fieldset>
-      ) : !hasPluginPresentation ? <><button className="condition-toggle" type="button" aria-expanded={conditionOpen} onClick={() => setConditionOpen((value) => !value)}><Icon name={conditionOpen ? 'chevron-down' : 'chevron-right'} />{t('approval.addCondition')}</button>{conditionOpen && <GrantScopeForm predicate={predicate} onChange={setPredicate} />}</> : <p className="permanent-note">{t('approval.noReusableScope')}</p>}
+      <fieldset className="scope-options" disabled={busy}>
+        <legend>{t('approval.reusableScope')}</legend>
+        {hasPluginPresentation && approval.presentation?.proposedScopes.map((scope) => (
+          <label key={scope.id}>
+            <input
+              type="radio"
+              name="scope"
+              checked={!toolWide && selectedScopeId === scope.id}
+              onChange={() => {
+                setSelectedScopeId(scope.id);
+                setToolWide(false);
+                setPermanent(false);
+              }}
+            />
+            {localizedMessage(scope.label, locale)}
+          </label>
+        ))}
+        {(!hasPluginPresentation || approval.presentation?.proposedScopes.length === 0) && (
+          <label>
+            <input
+              type="radio"
+              name="scope"
+              checked={!toolWide}
+              onChange={() => { setToolWide(false); setPermanent(false); }}
+            />
+            {t(hasPluginPresentation ? 'approval.allowOnce' : 'approval.customScope')}
+          </label>
+        )}
+        <label>
+          <input
+            type="radio"
+            name="scope"
+            checked={toolWide}
+            onChange={() => { setToolWide(true); setPermanent(false); }}
+          />
+          {t('approval.toolWideScope')}
+        </label>
+      </fieldset>
+      {toolWide ? (
+        <p className="permanent-note">{t('approval.toolWideHint')}</p>
+      ) : !hasPluginPresentation ? (
+        <>
+          <button className="condition-toggle" type="button" disabled={busy} aria-expanded={conditionOpen} onClick={() => setConditionOpen((value) => !value)}>
+            <Icon name={conditionOpen ? 'chevron-down' : 'chevron-right'} />
+            {t('approval.addCondition')}
+          </button>
+          {conditionOpen && <GrantScopeForm predicate={predicate} onChange={setPredicate} />}
+        </>
+      ) : selectedScope === undefined ? (
+        <p className="permanent-note">{t('approval.noReusableScope')}</p>
+      ) : null}
       {allowsForever && <><label className="confirm"><input type="checkbox" checked={permanent} onChange={(event) => setPermanent(event.target.checked)} />{t('approval.confirmForever')}</label><p className="permanent-note">{t('approval.foreverWarning')}</p></>}
       <label className="denial-reason">
         <span>{t('approval.denialReason')}</span>
@@ -169,7 +216,7 @@ export function ApprovalDetail({
             void decide({
               action: 'allow_until',
               expiresAt: new Date(Date.now() + 60 * 60_000).toISOString(),
-              ...(selectedScopeId === undefined ? { predicate } : { scopeId: selectedScopeId }),
+              ...grantScope,
             })
           }
         >
@@ -179,7 +226,7 @@ export function ApprovalDetail({
           type="button"
           className="primary"
           disabled={busy || !permanent}
-          onClick={() => void decide({ action: 'allow_forever', ...(selectedScopeId === undefined ? { predicate } : { scopeId: selectedScopeId }) })}
+          onClick={() => void decide({ action: 'allow_forever', ...grantScope })}
         >
           {busy ? t('approval.deciding') : t('approval.allowForever')}
         </button>}

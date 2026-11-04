@@ -19,6 +19,8 @@ export type ApprovalDecision =
   | {
       action: 'allow_until';
       expiresAt: string;
+      // Omitting both selectors grants this agent the whole tool on this
+      // upstream for at most one hour, with no argument predicates.
       predicate?: Predicate;
       scopeId?: string;
     }

@@ -56,7 +56,7 @@ export function ActiveGrants({
           <dl>
             <div>
               <dt>{t('access.scope')}</dt>
-              <dd>{grant.presentation !== undefined && <span className="grant-human-scope">{localizedMessage(grant.presentation.scope, locale)}</span>}{grant.expiresAt === undefined ? <span className="grant-scope permanent"><Icon name="infinity" />{t('access.forever')}</span> : <span className="grant-scope expiring"><Icon name="clock" />{t('access.validUntil')} {formatDate(grant.expiresAt)}</span>}</dd>
+              <dd>{grant.predicates.length === 0 ? <span className="grant-human-scope">{t('approval.toolWideScope')}</span> : grant.presentation !== undefined && <span className="grant-human-scope">{localizedMessage(grant.presentation.scope, locale)}</span>}{grant.expiresAt === undefined ? <span className="grant-scope permanent"><Icon name="infinity" />{t('access.forever')}</span> : <span className="grant-scope expiring"><Icon name="clock" />{t('access.validUntil')} {formatDate(grant.expiresAt)}</span>}</dd>
             </div>
             {grant.predicates.length > 0 && (
               <div>
