@@ -817,6 +817,35 @@ describe('admin API', () => {
                 },
               },
             },
+            {
+              type: 'record.upserted',
+              collection: 'approvals',
+              id: 'approval-completed',
+              value: {
+                approval: {
+                  id: 'approval-completed',
+                  callId: 'call-completed',
+                  requestHash: 'completed-request-hash',
+                  status: 'approved',
+                  reasonCode: 'policy.require_approval',
+                  schemaVersion: 1,
+                  createdAt: now,
+                  updatedAt: now,
+                  version: 1,
+                },
+                request: {
+                  callId: 'call-completed',
+                  clientTokenId: 'token-1',
+                  upstreamId: 'upstream-1',
+                  toolName: 'send_message',
+                  requestHash: 'completed-request-hash',
+                  context: { message: 'not for the pending approvals feed' },
+                  normalizationVersion: 1,
+                  reasonCode: 'policy.require_approval',
+                  expiresAt: '2099-07-30T08:28:22.098Z',
+                },
+              },
+            },
           ],
         });
       },
@@ -830,6 +859,7 @@ describe('admin API', () => {
     });
     expect(approvals.json()).toEqual([
       expect.objectContaining({
+        approval: expect.objectContaining({ id: 'approval-1' }),
         tokenLabel: 'Claude Code',
         upstreamAlias: 'Signal',
       }),

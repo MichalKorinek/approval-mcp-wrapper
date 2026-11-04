@@ -6,6 +6,19 @@ import {
 } from './sse-broker.js';
 
 describe('ApprovalEventBroker', () => {
+  it('does not replay old events to a new connection, but delivers new events', () => {
+    const broker = new ApprovalEventBroker(10);
+    broker.publish({ approvalId: 'old', status: 'approved' });
+    const listener = vi.fn();
+
+    const subscription = broker.subscribe(undefined, listener);
+    expect(listener).not.toHaveBeenCalled();
+
+    const next = broker.publish({ approvalId: 'new', status: 'pending' });
+    expect(listener).toHaveBeenCalledExactlyOnceWith(next);
+    subscription.close();
+  });
+
   it('replays events after Last-Event-ID and cleans up subscribers', () => {
     const broker = new ApprovalEventBroker(10);
     broker.publish({ approvalId: 'a1', status: 'pending' });

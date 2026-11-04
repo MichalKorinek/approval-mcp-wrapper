@@ -21,15 +21,19 @@ export function useApprovalEvents() {
     );
   }, []);
 
-  const refreshSafely = useCallback(() => {
-    void refresh().catch(() => undefined);
-  }, [refresh]);
-
   useEffect(() => {
     let closed = false;
     let source: EventSource | undefined;
     let retry = 1_000;
-    let timer: ReturnType<typeof setTimeout> | undefined;
+    let reconnectTimer: ReturnType<typeof setTimeout> | undefined;
+    let refreshTimer: ReturnType<typeof setTimeout> | undefined;
+    const refreshSoon = () => {
+      if (refreshTimer !== undefined) clearTimeout(refreshTimer);
+      refreshTimer = setTimeout(() => {
+        refreshTimer = undefined;
+        void refresh().catch(() => undefined);
+      }, 75);
+    };
     const connect = () => {
       const query =
         lastEventId.current === ''
@@ -39,29 +43,30 @@ export function useApprovalEvents() {
       source.onopen = () => {
         retry = 1_000;
         setConnected(true);
-        refreshSafely();
+        refreshSoon();
       };
       source.onmessage = (event) => {
         lastEventId.current = event.lastEventId;
-        refreshSafely();
+        refreshSoon();
       };
       source.onerror = () => {
         setConnected(false);
         source?.close();
         if (!closed) {
-          timer = setTimeout(connect, retry);
+          reconnectTimer = setTimeout(connect, retry);
           retry = Math.min(retry * 2, 15_000);
         }
       };
     };
-    refreshSafely();
+    refreshSoon();
     connect();
     return () => {
       closed = true;
-      if (timer !== undefined) clearTimeout(timer);
+      if (reconnectTimer !== undefined) clearTimeout(reconnectTimer);
+      if (refreshTimer !== undefined) clearTimeout(refreshTimer);
       source?.close();
     };
-  }, [refreshSafely]);
+  }, [refresh]);
 
   return { approvals, connected, refresh };
 }

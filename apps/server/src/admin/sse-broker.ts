@@ -36,9 +36,13 @@ class ReplayEventBroker<Data extends object> {
     lastEventId: string | undefined,
     listener: (event: SseEvent<Data>) => void,
   ): SseSubscription {
-    const last = Number(lastEventId ?? 0);
-    for (const event of this.#events) {
-      if (Number(event.id) > last) listener(structuredClone(event));
+    // A fresh connection gets its current snapshot from the API. Replay only
+    // when a reconnect explicitly supplies the last event it received.
+    if (lastEventId !== undefined && /^\d+$/.test(lastEventId)) {
+      const last = Number(lastEventId);
+      for (const event of this.#events) {
+        if (Number(event.id) > last) listener(structuredClone(event));
+      }
     }
     this.#subscribers.add(listener);
     return {

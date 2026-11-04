@@ -73,7 +73,9 @@ export async function registerApprovalRoutes(
   app.get('/api/admin/approvals', async (request, reply) => {
     if (!await authorizeAdmin(request, reply, options.sessions, false)) return;
     return options.state.read((state) =>
-      Object.values(state.approvals).map((value) => {
+      Object.values(state.approvals).filter((value) =>
+        (value as unknown as ApprovalRecord).approval.status === 'pending',
+      ).map((value) => {
         const record = value as unknown as ApprovalRecord;
         return {
           ...record,
