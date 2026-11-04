@@ -56,24 +56,33 @@ Assessment date: 2026-10-09
 - Security: must pass the lockfile npm audit and CI advisory gate before merge.
 - Rationale: maintained HTTP framework with schema validation, injection testing, lifecycle hooks, and streaming support.
 
-## @fastify/static@10.1.2
+## @fastify/static@10.1.9
 
-- Latest release: 2026-07-23.
-- Adoption: approximately 136,000 weekly downloads for the latest version.
+- Security update assessed: 2026-11-04; replaces 10.1.2.
+- Release: 2026-11-04.
+- Adoption: 8,502,347 npm downloads in 2026-10-28 through 2026-11-03.
 - Maintainers: official Fastify organization.
-- Runtime dependencies: verified from the installed lockfile during admission.
+- Runtime dependencies: seven; remains compatible with Fastify 5 and Node 24.
 - License: MIT.
-- Security: must pass the lockfile npm audit and CI advisory gate before merge.
+- Security: lockfile resolves glob 14.0.3 and minimatch 11.0.4, addressing
+  [GHSA-3g3m-2fjr-6pw4](https://github.com/advisories/GHSA-3g3m-2fjr-6pw4)
+  and [GHSA-g3hv-75wg-m249](https://github.com/advisories/GHSA-g3hv-75wg-m249).
+  OSV reports no advisory for this version, and the production npm audit no
+  longer reports these packages. Must pass the CI advisory gate before merge.
 - Rationale: safely serves the production Vite assets through the same Fastify process.
 
-## zod@4.4.3
+## zod@4.6.7
 
-- Latest release: 2026-04.
-- Adoption: more than 198 million weekly downloads and more than 110,000 dependents.
+- Security update assessed: 2026-11-04; replaces 4.4.3 across all workspaces.
+- Release: 2026-10-12.
+- Adoption: 450,642,092 npm downloads in 2026-10-28 through 2026-11-03.
 - Maintainers: active project with a stable v4 release line.
 - Runtime dependencies: zero.
 - License: MIT.
-- Security: must pass the lockfile npm audit and CI advisory gate before merge.
+- Security: upgrades past the affected range of
+  [GHSA-mrhx-c7xc-m3w5](https://github.com/advisories/GHSA-mrhx-c7xc-m3w5).
+  OSV reports no advisory for this version, and the production npm audit no
+  longer reports Zod. Must pass the CI advisory gate before merge.
 - Rationale: required by the official MCP SDK and used for boundary validation.
 
 ## @simplewebauthn/server@13.3.2
