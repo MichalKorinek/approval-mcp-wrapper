@@ -42,30 +42,30 @@ const state = await createConfigStateStore(join(temporaryDir, 'data'));
 const sessions = new SessionService(new InMemorySessionRepository());
 const session = await sessions.create('demo-admin');
 const tokens = new TokenService(new StateStoreTokenRepository(state));
-const agent = (await tokens.create('Asistent — práce')).record;
-const secondAgent = (await tokens.create('Asistent — soukromí')).record;
+const agent = (await tokens.create('Work assistant')).record;
+const secondAgent = (await tokens.create('Personal assistant')).record;
 const now = new Date().toISOString();
 const versioned = (id, values) => ({ id, schemaVersion: 1, createdAt: now, updatedAt: now, version: 1, ...values });
 const upstreams = [
-  versioned('demo-work-mail', { alias: 'work_mail', displayName: 'Pracovní e-mail', description: 'Firemní schránka pro práci na projektu.', metadata: { account: 'práce', owner: 'demo tým' }, url: 'https://mail-work.example/mcp', allowPrivateNetwork: false, pluginId: 'email', pluginVersion: '1.0.0' }),
-  versioned('demo-private-mail', { alias: 'private_mail', displayName: 'Soukromý e-mail', description: 'Osobní schránka oddělená od pracovních nástrojů.', metadata: { account: 'soukromí' }, url: 'https://mail-personal.example/mcp', allowPrivateNetwork: false, pluginId: 'email', pluginVersion: '1.0.0' }),
-  versioned('demo-whatsapp', { alias: 'whatsapp', displayName: 'WhatsApp', description: 'Zprávy a chaty; odesílání vyžaduje schválení.', url: 'https://chat.example/mcp', allowPrivateNetwork: false, pluginId: 'whatsapp', pluginVersion: '1.0.0' }),
+  versioned('demo-work-mail', { alias: 'work_mail', displayName: 'Work email', description: 'Company mailbox for project work.', metadata: { account: 'work', owner: 'demo team' }, url: 'https://mail-work.example/mcp', allowPrivateNetwork: false, pluginId: 'email', pluginVersion: '1.0.0' }),
+  versioned('demo-private-mail', { alias: 'private_mail', displayName: 'Personal email', description: 'Personal mailbox kept separate from work tools.', metadata: { account: 'personal' }, url: 'https://mail-personal.example/mcp', allowPrivateNetwork: false, pluginId: 'email', pluginVersion: '1.0.0' }),
+  versioned('demo-whatsapp', { alias: 'whatsapp', displayName: 'WhatsApp', description: 'Messages and chats; sending requires approval.', url: 'https://chat.example/mcp', allowPrivateNetwork: false, pluginId: 'whatsapp', pluginVersion: '1.0.0' }),
 ];
 const profiles = [
-  versioned('demo-profile-work', { name: 'Práce', isDefault: true, approvalTimeoutSeconds: 300, toolCallTimeoutSeconds: 60 }),
-  versioned('demo-profile-private', { name: 'Soukromí', isDefault: false, approvalTimeoutSeconds: 60, toolCallTimeoutSeconds: 60 }),
+  versioned('demo-profile-work', { name: 'Work', isDefault: true, approvalTimeoutSeconds: 300, toolCallTimeoutSeconds: 60 }),
+  versioned('demo-profile-private', { name: 'Personal', isDefault: false, approvalTimeoutSeconds: 60, toolCallTimeoutSeconds: 60 }),
 ];
 const catalogs = {
   'demo-work-mail': [
-    { name: 'search', description: 'Vyhledat e-maily podle dotazu.' },
-    { name: 'text', description: 'Přečíst obsah vybraného e-mailu.' },
-    { name: 'refresh', description: 'Spustit synchronizaci schránky.' },
+    { name: 'search', description: 'Search emails by query.' },
+    { name: 'text', description: 'Read the selected email.' },
+    { name: 'refresh', description: 'Start mailbox synchronization.' },
   ],
-  'demo-private-mail': [{ name: 'search', description: 'Vyhledat osobní e-maily.' }],
+  'demo-private-mail': [{ name: 'search', description: 'Search personal emails.' }],
   'demo-whatsapp': [
-    { name: 'list_chats', description: 'Zobrazit seznam chatů.' },
-    { name: 'send_message', description: 'Odeslat zprávu příjemci nebo do skupiny.' },
-    { name: 'send_file', description: 'Odeslat soubor přes WhatsApp.' },
+    { name: 'list_chats', description: 'List available chats.' },
+    { name: 'send_message', description: 'Send a message to a recipient or group.' },
+    { name: 'send_file', description: 'Send a file through WhatsApp.' },
   ],
 };
 const rules = [
@@ -96,15 +96,15 @@ const approvals = new ApprovalOrchestrator(repository, () => new Date(), () => f
   (approval) => broker.publish({ approvalId: approval.id, status: approval.status }));
 const journal = await createCallJournal(join(temporaryDir, 'calls'), (event) => historyBroker.publish({ callId: event.callId, timestamp: event.timestamp, type: event.type }));
 const contactNames = new Map([
-  ['demo-project-team@lid', 'Projektový tým'],
-  ['demo-second-chat@lid', 'Organizační tým'],
+  ['demo-project-team@lid', 'Project team'],
+  ['demo-second-chat@lid', 'Organizing team'],
 ]);
 const plugins = connectedApprovalPlugins({
   async findContact(_upstreamId, _source, identifier) {
-    return { contacts: [{ jid: identifier, name: contactNames.get(identifier) ?? 'Ukázkový kontakt' }] };
+    return { contacts: [{ jid: identifier, name: contactNames.get(identifier) ?? 'Sample contact' }] };
   },
   async findChat(_upstreamId, identifier) {
-    return { jid: identifier, name: contactNames.get(identifier) ?? 'Ukázkový chat' };
+    return { jid: identifier, name: contactNames.get(identifier) ?? 'Sample chat' };
   },
 });
 let simulatedExecutions = 0;
@@ -125,10 +125,10 @@ const coordinator = new PolicyCallCoordinator({
 });
 const signal = new AbortController();
 const call = (upstreamId, toolName, args) => coordinator.call({ clientTokenId: agent.id, upstreamId, toolName, arguments: args }, signal.signal);
-await call('demo-work-mail', 'search', { account: 'práce', query: 'stav projektu' });
+await call('demo-work-mail', 'search', { account: 'work', query: 'project status' });
 await assert.rejects(call('demo-work-mail', 'refresh', {}), PolicyDeniedError);
 const deviceViews = ['Demo Mac · Safari', 'Demo iPhone'].map((name, index) => ({
-  id: `demo-device-${index}`, name, locale: 'cs', platform: index === 0 ? 'macOS' : 'iOS', endpointHash: String(index).repeat(64), createdAt: now, updatedAt: now,
+  id: `demo-device-${index}`, name, locale: 'en', platform: index === 0 ? 'macOS' : 'iOS', endpointHash: String(index).repeat(64), createdAt: now, updatedAt: now,
 }));
 const unavailable = async () => { throw new Error('Authentication enrollment and real push delivery are not part of this isolated recording fixture'); };
 const app = await buildServerApp({ auth: {
@@ -147,10 +147,10 @@ try {
   app.setNotFoundHandler((request, reply) => request.method === 'GET' && !request.url.startsWith('/api/') ? reply.sendFile('index.html') : reply.code(404).send({ error: { code: 'route.not_found' } }));
   const origin = await app.listen({ host: '127.0.0.1', port: 0 });
   browser = await chromium.launch({ headless: true, ...(process.env.DEMO_CHROMIUM_EXECUTABLE ? { executablePath: process.env.DEMO_CHROMIUM_EXECUTABLE } : {}) });
-  context = await browser.newContext({ viewport: { width: 1440, height: 1080 }, locale: 'cs-CZ', timezoneId: 'Europe/Prague', recordVideo: { dir: join(temporaryDir, 'video'), size: { width: 1440, height: 1080 } } });
+  context = await browser.newContext({ viewport: { width: 1440, height: 1080 }, locale: 'en-US', timezoneId: 'UTC', recordVideo: { dir: join(temporaryDir, 'video'), size: { width: 1440, height: 1080 } } });
   await context.addCookies([{ name: 'amcp_admin', value: session.plaintext, url: origin, httpOnly: true }, { name: 'amcp_csrf', value: session.csrfToken, url: origin }]);
   await context.addInitScript(() => {
-    localStorage.setItem('approval-mcp.locale', 'cs');
+    localStorage.setItem('approval-mcp.locale', 'en');
     localStorage.setItem('approval-mcp.theme', 'light');
   });
   const page = await context.newPage();
@@ -166,7 +166,7 @@ try {
       const card = document.createElement('div');
       card.id = 'demo-scene';
       Object.assign(card.style, { position: 'fixed', inset: '0', zIndex: '2147483647', display: 'grid', placeContent: 'center', padding: '100px', textAlign: 'left', background: 'radial-gradient(ellipse at 15% 20%, #1d3872, #0b1224 65%)', color: '#f8fafc', fontFamily: 'system-ui, sans-serif' });
-      const brand = document.createElement('p'); brand.textContent = 'APPROVAL MCP / UKÁZKA'; Object.assign(brand.style, { color: '#93c5fd', fontSize: '18px', fontWeight: '700', letterSpacing: '3px', marginBottom: '26px' });
+      const brand = document.createElement('p'); brand.textContent = 'APPROVAL MCP / DEMO'; Object.assign(brand.style, { color: '#93c5fd', fontSize: '18px', fontWeight: '700', letterSpacing: '3px', marginBottom: '26px' });
       const heading = document.createElement('h1'); heading.textContent = title; Object.assign(heading.style, { fontSize: '58px', maxWidth: '1100px', lineHeight: '1.15', margin: '0 0 22px' });
       const detail = document.createElement('p'); detail.textContent = subtitle; Object.assign(detail.style, { color: '#cbd5e1', fontSize: '25px', maxWidth: '1050px', lineHeight: '1.6' });
       card.append(brand, heading, detail); document.body.append(card);
@@ -175,70 +175,70 @@ try {
     await page.evaluate(() => document.getElementById('demo-scene')?.remove());
   };
   await page.goto(`${origin}/upstreams`);
-  await page.getByRole('heading', { name: 'Pracovní e-mail', exact: true }).waitFor();
+  await page.getByRole('heading', { name: 'Work email', exact: true }).waitFor();
   await page.evaluate(() => {
-    const badge = document.createElement('div'); badge.textContent = 'DEMO · UKÁZKOVÁ DATA';
+    const badge = document.createElement('div'); badge.textContent = 'DEMO · SAMPLE DATA';
     Object.assign(badge.style, { position: 'fixed', bottom: '10px', left: '50%', transform: 'translateX(-50%)', zIndex: '2147483646', padding: '7px 14px', background: '#0f172ae6', color: '#cbd5e1', borderRadius: '20px', font: '600 11px system-ui', letterSpacing: '1px', pointerEvents: 'none' });
     document.body.append(badge);
   });
-  await scene('Vaši agenti. Vaše pravidla.', 'Krátká prohlídka schvalovací brány. Všechna data jsou ukázková; žádná zpráva ani push notifikace se skutečně neodesílá.', 3_200);
-  await scene('01 / Připojte svoje MCP servery', 'Názvy, popisy a metadata odliší pracovní i soukromé účty.');
+  await scene('Your agents. Your rules.', 'A quick tour of the approval gateway. All data is fictional; no real messages or push notifications are sent.', 3_200);
+  await scene('01 / Connect your MCP servers', 'Names, descriptions, and metadata keep work and personal accounts distinct.');
   await pause(3_000);
-  await click(page.locator('.upstream-record').filter({ hasText: 'Pracovní e-mail' }).getByRole('button', { name: 'Upravit', exact: true }));
+  await click(page.locator('.upstream-record').filter({ hasText: 'Work email' }).getByRole('button', { name: 'Edit', exact: true }));
   await pause(2_500);
   await click(page.locator('[data-route="/access"]').first());
-  await page.getByText('Asistent — práce', { exact: true }).waitFor();
-  await scene('02 / Profily řídí dostupné tooly', 'Každý agent dostane svůj profil. Čekání na schválení a běh toolu mají samostatné časové limity.');
+  await page.getByText('Work assistant', { exact: true }).waitFor();
+  await scene('02 / Profiles control tool access', 'Give each agent a profile. Approval waits and tool execution have separate timeouts.');
   await pause(2_000);
-  await click(page.getByRole('tab', { name: /^Profily/ }));
-  await page.getByLabel('Čekání na schválení', { exact: true }).waitFor();
+  await click(page.getByRole('tab', { name: /^Profiles/ }));
+  await page.getByLabel('Approval wait', { exact: true }).waitFor();
   await pause(4_000);
   await page.locator('.profile-server').filter({ hasText: 'WhatsApp' }).scrollIntoViewIfNeeded();
   await pause(2_000);
   await click(page.locator('[data-route="/approvals"]').first());
-  const pendingCall = call('demo-whatsapp', 'send_message', { recipient: 'demo-project-team@lid', message: 'Ahoj týme, návrh je připravený k připomínkám. Prosím o zpětnou vazbu do pátku. Díky!' });
+  const pendingCall = call('demo-whatsapp', 'send_message', { recipient: 'demo-project-team@lid', message: 'Hi team, the draft is ready for review. Please share your feedback by Friday. Thanks!' });
   // Attach a rejection handler immediately, including if recording later fails.
   const pendingResult = pendingCall.then((result) => ({ result }), (error) => ({ error }));
   await page.locator('.approval-card').waitFor();
-  await scene('03 / Schvalujte konkrétní obsah', 'Vidíte agenta, příjemce i celý text zprávy. Technické argumenty jsou stále dostupné.');
+  await scene('03 / Review the actual content', 'See the agent, recipient, and full message. Expand the technical arguments whenever you need them.');
   await click(page.locator('.approval-card').first());
   const dialog = page.getByRole('dialog');
-  await dialog.getByText('Projektový tým', { exact: true }).waitFor();
+  await dialog.getByText('Project team', { exact: true }).waitFor();
   await pause(4_000);
-  await dialog.getByRole('radio', { name: 'Celý nástroj (libovolné parametry)', exact: true }).check();
-  await move(dialog.getByRole('button', { name: 'Povolit na 1 hodinu', exact: true }));
-  await scene('04 / Na hodinu i bez scope', 'Stejný agent může používat tento tool na stejném upstreamu s libovolnými parametry. Oprávnění můžete kdykoli zrušit.');
+  await dialog.getByRole('radio', { name: 'Whole tool (any arguments)', exact: true }).check();
+  await move(dialog.getByRole('button', { name: 'Allow for 1 hour', exact: true }));
+  await scene('04 / One hour, any arguments', 'Allow this agent to use the same tool on the same upstream without argument restrictions. Revoke the grant at any time.');
   await pause(3_500);
   await page.screenshot({ path: join(outputDir, 'approval-mcp-demo.png') });
   const saved = page.waitForResponse((response) => response.url().endsWith('/decision') && response.request().method() === 'POST');
-  await click(dialog.getByRole('button', { name: 'Povolit na 1 hodinu', exact: true }));
+  await click(dialog.getByRole('button', { name: 'Allow for 1 hour', exact: true }));
   assert.equal((await saved).status(), 200);
   const result = await pendingResult;
   if (result.error) throw result.error;
   const grant = state.read((current) => Object.values(current.grants).find((item) => item.toolName === 'send_message'));
   assert.deepEqual(grant.predicates, []);
   assert.ok(grant.expiresAt);
-  await call('demo-whatsapp', 'send_message', { recipient: 'demo-second-chat@lid', message: 'Ukázková zpráva jinému příjemci v rámci hodinového oprávnění.' });
+  await call('demo-whatsapp', 'send_message', { recipient: 'demo-second-chat@lid', message: 'A sample message to another recipient using the one-hour tool-wide grant.' });
   assert.equal((await repository.list()).filter((item) => item.approval.status === 'pending').length, 0);
   await click(page.locator('[data-route="/access"]').first());
-  await click(page.getByRole('tab', { name: /^Aktivní oprávnění/ }));
-  await page.getByText('Celý nástroj (libovolné parametry)', { exact: true }).waitFor();
+  await click(page.getByRole('tab', { name: /^Active permissions/ }));
+  await page.getByText('Whole tool (any arguments)', { exact: true }).waitFor();
   await pause(3_500);
   await click(page.locator('[data-route="/history"]').first());
   await page.locator('.history-table > button').first().waitFor();
-  await scene('05 / Každé rozhodnutí má historii', 'Volání s jiným příjemcem už nečeká na další souhlas. Historie uchová schválení, výsledek i časovou osu.');
+  await scene('05 / Every decision has a history', 'A call to another recipient no longer prompts for approval. History preserves the decision, result, and timeline.');
   await pause(2_500);
-  await click(page.locator('.history-table > button').filter({ hasText: 'Projektový tým' }).first());
+  await click(page.locator('.history-table > button').filter({ hasText: 'Project team' }).first());
   await page.getByRole('dialog').locator('.timeline li').first().waitFor();
   await pause(4_000);
-  await click(page.getByRole('dialog').getByRole('button', { name: 'Zavřít', exact: true }));
+  await click(page.getByRole('dialog').getByRole('button', { name: 'Close', exact: true }));
   await click(page.locator('[data-route="/system"]').first());
   await page.getByText('Demo Mac · Safari', { exact: true }).waitFor();
-  await scene('06 / Notifikace pod kontrolou', 'Pojmenovaná zařízení, Test a Odebrat na jednom místě. V této ukázce se žádná systémová notifikace neodesílá.');
+  await scene('06 / Manage your notifications', 'Named devices, Test, and Remove in one place. This demo does not send system notifications.');
   await pause(3_500);
-  await click(page.getByRole('button', { name: 'Tmavý motiv', exact: true }).first());
+  await click(page.getByRole('button', { name: 'Dark theme', exact: true }).first());
   await pause(2_000);
-  await scene('Začněte na localhost:43127', 'Postup pro Docker, OAuth klienty, profily i zálohy najdete v README.');
+  await scene('Start at localhost:43127', 'Find Docker setup, OAuth client configuration, profiles, and backup instructions in the README.');
   assert.equal(simulatedExecutions, 3);
   assert.deepEqual(errors, []);
   await context.close(); context = undefined;

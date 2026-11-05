@@ -1,28 +1,30 @@
-# Video ukázka
+# Video demo
 
-[Přehrát video (WebM)](media/approval-mcp-demo.webm)
+[Watch the video (WebM)](media/approval-mcp-demo.webm)
 
-Ukázka zachycuje skutečné GUI a lokální admin API. Začíná předem přihlášenou
-testovací session; nahrávání nepředvádí passkey ani OAuth přihlášení.
-Používá izolovaný dočasný datový adresář, vymyšlené kontakty, simulované MCP
-odpovědi a ukázkový seznam push zařízení. Žádný upstream ani push provider se
-nekontaktuje. Schvalovací workflow, zápis oprávnění, historie a jeho zobrazení
-v aplikaci jsou skutečné.
+The demo records the actual UI and local admin API. It starts with a
+pre-authenticated test session and does not demonstrate passkey or OAuth
+sign-in. It uses an isolated temporary data directory, fictional contacts,
+simulated MCP responses, and a sample list of push devices. No upstream or
+push provider is contacted. The approval workflow, grant persistence, call
+history, and their presentation in the app are real.
 
-## Scénář
+## Walkthrough
 
-1. Pojmenované upstreamy, popis a metadata pracovního a soukromého účtu.
-2. Agent, jeho profil, pravidla a dva nezávislé timeouty.
-3. Detail čekající zprávy s lidským názvem příjemce a úplným textem.
-4. Volba celého nástroje a schválení na hodinu bez podmínky na příjemce.
-5. Nové oprávnění v Přístupech a další volání s jiným příjemcem bez nové výzvy.
-6. Historie a detail průběhu volání.
-7. Seznam notifikačních zařízení s tlačítky Test a Odebrat; samotné doručení
-   systémové notifikace se nesimuluje ani nenahrává.
+1. Named upstreams, descriptions, and metadata for work and personal accounts.
+2. Agents, their profiles, rules, and two independent timeouts.
+3. A pending message with a readable recipient name and its complete text.
+4. Selecting the entire tool and approving it for one hour without recipient
+   restrictions.
+5. The new grant in Access and another call with a different recipient that
+   does not prompt again.
+6. History and a call timeline.
+7. Notification devices with Test and Remove buttons. Actual system
+   notification delivery is neither simulated nor recorded.
 
-## Jak video znovu natočit
+## Record the demo again
 
-Z kořene repozitáře, s Node.js 24:
+From the repository root, using Node.js 24:
 
 ```bash
 npm ci
@@ -30,16 +32,17 @@ npx playwright install chromium
 npm run demo:record
 ```
 
-Na Linuxu může být potřeba instalace systémových knihoven pro Chromium
-pomocí `npx playwright install --with-deps chromium`. Nahrávání spouští pouze
-lokální server na náhodném portu a po dokončení jej zastaví.
+On Linux, you may need Chromium's system libraries installed with
+`npx playwright install --with-deps chromium`. Recording starts a local
+server on a random port and stops it when finished.
 
-Výstupy jsou `docs/media/approval-mcp-demo.webm` a náhled
-`docs/media/approval-mcp-demo.png`. Video je bez zvuku; jednotlivé části
-uvádějí české titulky. WebM lze přehrát v prohlížeči nebo stáhnout.
+The outputs are `docs/media/approval-mcp-demo.webm` and the poster image
+`docs/media/approval-mcp-demo.png`. The silent video uses an English UI,
+English sample data, and English title cards. Play the WebM file in your
+browser or download it.
 
-Pro již nainstalovaný prohlížeč lze nastavit `DEMO_CHROMIUM_EXECUTABLE`;
-`PLAYWRIGHT_BROWSERS_PATH` musí ukazovat i na instalaci Playwright FFmpeg.
-Proměnná `DEMO_OUTPUT_DIR` umožňuje uložit výstupy jinam. `DEMO_SPEED` je
-kladný násobek délky prezentačních pauz, například `0.1` pro rychlou kontrolu
-scénáře. Standardní nahrávka používá hodnotu `1`.
+To use an existing browser installation, set `DEMO_CHROMIUM_EXECUTABLE`;
+`PLAYWRIGHT_BROWSERS_PATH` must also contain Playwright's FFmpeg installation.
+Set `DEMO_OUTPUT_DIR` to save the files elsewhere. `DEMO_SPEED` is a positive
+multiplier for presentation pauses, such as `0.1` for a quick walkthrough
+check. The standard recording uses `1`.
