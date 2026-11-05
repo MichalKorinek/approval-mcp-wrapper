@@ -120,6 +120,58 @@ jobs:
           root_status="$(curl --silent --output /dev/null --write-out '%{http_code}' http://127.0.0.1:3000/)"
           test "$root_status" = 200
 
+          # Initial installs are asynchronous. Verify all catalog entries were
+          # durably installed before replacing the container with no network.
+          plugins_ready=false
+          for attempt in {1..120}; do
+            if docker exec "$container_name" node --input-type=module -e '
+              import { createConfigStateStore } from "@approval-mcp/state-store";
+              const state = await createConfigStateStore("/data");
+              const installed = state.read(s => Object.values(s.plugins).filter(p => p.installations?.length > 0));
+              process.exit(installed.length === 6 ? 0 : 1);
+            '; then
+              plugins_ready=true
+              break
+            fi
+            sleep 0.5
+          done
+          test "$plugins_ready" = true
+
+          docker rm --force "$container_name" >/dev/null
+          docker run --detach \
+            --name "$container_name" \
+            --network none \
+            --read-only \
+            --tmpfs /tmp:rw,noexec,nosuid,size=64m \
+            --mount "source=${volume_name},target=/data" \
+            --env APPROVAL_MCP_PUBLIC_URL=http://localhost:3000 \
+            --env APPROVAL_MCP_MASTER_KEY="$master_key" \
+            approval-mcp-wrapper:ci >/dev/null
+          offline_ready=false
+          for attempt in {1..40}; do
+            if docker exec "$container_name" node --input-type=module -e '
+              const response = await fetch("http://127.0.0.1:3000/health/ready");
+              process.exit(response.ok && (await response.json()).ready ? 0 : 1);
+            ' 2>/dev/null; then
+              offline_ready=true
+              break
+            fi
+            sleep 0.25
+          done
+          test "$offline_ready" = true
+          docker exec "$container_name" node --input-type=module -e '
+            import { createConfigStateStore } from "@approval-mcp/state-store";
+            import { PluginRegistry } from "@approval-mcp/plugin-sdk";
+            import { PluginManager } from "./apps/server/dist/plugins/plugin-manager.js";
+            const state = await createConfigStateStore("/data");
+            const registry = new PluginRegistry([]);
+            const manager = new PluginManager({ directory: "/data/plugins", state, registry, host: {}, fetch: async () => { throw new Error("Offline restart must use cache"); } });
+            await manager.restore();
+            await manager.installDefaults();
+            if (registry.list().length !== 6) throw new Error("Missing cached plugins");
+            await manager.close();
+          '
+
   publish:
     name: Publish GHCR image
     if: >-

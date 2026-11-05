@@ -15,6 +15,8 @@ import { registerPolicyRoutes } from './policy-routes.js';
 import { registerProfileRoutes } from './profile-routes.js';
 import { registerPushRoutes, type PushAdminService } from './push-routes.js';
 import { registerSystemRoutes } from './system-routes.js';
+import { registerPluginRoutes } from './plugin-routes.js';
+import type { PluginManager } from '../plugins/plugin-manager.js';
 import { registerUpstreamRoutes } from './upstream-routes.js';
 import {
   ApprovalEventBroker,
@@ -30,6 +32,8 @@ export interface AdminRouteOptions {
   journal?: CallJournal;
   broker?: ApprovalEventBroker;
   historyBroker?: HistoryEventBroker;
+  pluginManager?: PluginManager;
+  getPlugins?(): readonly Readonly<{ id: string; version: string; normalizationVersion: number }>[];
   plugins?: readonly Readonly<{
     id: string;
     version: string;
@@ -60,6 +64,7 @@ export async function registerAdminRoutes(
   });
   await registerPushRoutes(app, options);
   await registerSystemRoutes(app, options);
+  await registerPluginRoutes(app, options);
 }
 
 export * from './sse-broker.js';

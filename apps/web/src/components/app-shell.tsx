@@ -13,6 +13,7 @@ const nav: { page: Page; key: `nav.${Page}`; icon: IconName }[] = [
   { page: 'history', key: 'nav.history', icon: 'arrow-history' },
   { page: 'access', key: 'nav.access', icon: 'shield-check' },
   { page: 'upstreams', key: 'nav.upstreams', icon: 'sync' },
+  { page: 'plugins', key: 'nav.plugins', icon: 'chip' },
   { page: 'system', key: 'nav.system', icon: 'chip' },
 ];
 

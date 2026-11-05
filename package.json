@@ -15,6 +15,7 @@
     "typecheck": "tsc -b",
     "build": "tsc -b && npm run build -w @approval-mcp/web",
     "demo:record": "npm run build && node scripts/record-demo.mjs",
+    "test:plugin-ui": "npm run build && node scripts/verify-plugin-ui.mjs",
     "audit:deps": "node scripts/dependency-report.mjs && npm audit --omit=dev --audit-level=high",
     "verify:language": "node scripts/verify-language.mjs",
     "verify": "npm run typecheck && npm test && npm run build && npm run audit:deps && npm run verify:language"

@@ -9,6 +9,10 @@ simulated MCP responses, and a sample list of push devices. No upstream or
 push provider is contacted. The approval workflow, grant persistence, call
 history, and their presentation in the app are real.
 
+Recording downloads the official presentation plugins from their public
+repositories into its temporary fixture cache. Outbound HTTPS to GitHub is
+required; no real MCP server or personal account is contacted.
+
 ## Walkthrough
 
 1. Named upstreams, descriptions, and metadata for work and personal accounts.

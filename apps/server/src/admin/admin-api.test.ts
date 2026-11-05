@@ -29,6 +29,7 @@ afterEach(async () => {
 });
 
 async function fixture(options?: {
+  getPlugins?(): readonly Readonly<{ id: string; version: string; normalizationVersion: number }>[];
   plugins?: readonly Readonly<{
     id: string;
     version: string;
@@ -74,6 +75,7 @@ async function fixture(options?: {
     credentialVault: new CredentialVault(Buffer.alloc(32, 7)),
     onUpstreamsChanged: options?.onUpstreamsChanged,
     plugins: options?.plugins,
+    getPlugins: options?.getPlugins,
   });
   apps.push(app);
   return {
@@ -87,6 +89,20 @@ async function fixture(options?: {
 }
 
 describe('admin API', () => {
+  it('keeps an existing disabled plugin pin editable but rejects new assignments to unavailable versions', async () => {
+    let plugins = [{ id: 'email', version: '1.0.0', normalizationVersion: 2 }];
+    const { app, authHeaders } = await fixture({ getPlugins: () => plugins });
+    const payload = { alias: 'mail', url: 'https://example.com/mcp', allowPrivateNetwork: false, pluginId: 'email', pluginVersion: '1.0.0' };
+    const created = await app.inject({ method: 'POST', url: '/api/admin/upstreams', headers: authHeaders, payload });
+    expect(created.statusCode).toBe(201);
+    plugins = [];
+    const updated = await app.inject({ method: 'PUT', url: `/api/admin/upstreams/${created.json().id}`, headers: authHeaders,
+      payload: { ...payload, displayName: 'Renamed mailbox', version: created.json().version } });
+    expect(updated.statusCode).toBe(200);
+    expect(updated.json()).toMatchObject({ pluginId: 'email', pluginVersion: '1.0.0', displayName: 'Renamed mailbox' });
+    const invalid = await app.inject({ method: 'POST', url: '/api/admin/upstreams', headers: authHeaders, payload: { ...payload, alias: 'new-mail' } });
+    expect(invalid.statusCode).toBe(400);
+  });
   it('exposes self tools in profile rules and issues manager tokens only when explicitly requested', async () => {
     const { app, authHeaders } = await fixture();
     const catalog = await app.inject({

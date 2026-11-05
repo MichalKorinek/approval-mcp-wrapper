@@ -10,9 +10,11 @@ describe('application routes', () => {
       access: '/access',
       upstreams: '/upstreams',
       system: '/system',
+      plugins: '/plugins',
     });
     expect(routeFromLocation({ pathname: '/history/', search: '' }))
       .toEqual({ page: 'history' });
+    expect(routeFromLocation({ pathname: '/plugins', search: '' })).toEqual({ page: 'plugins' });
   });
 
   it('round-trips approval detail routes', () => {

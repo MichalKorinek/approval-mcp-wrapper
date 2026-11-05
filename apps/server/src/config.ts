@@ -1,4 +1,4 @@
-import { isAbsolute } from 'node:path';
+import { isAbsolute, join } from 'node:path';
 
 import { z } from 'zod';
 
@@ -7,6 +7,7 @@ const environmentSchema = z.object({
   APPROVAL_MCP_OAUTH_ORIGINS: z.string().optional(),
   APPROVAL_MCP_ALLOW_INSECURE_OAUTH_PRIVATE_HTTP: z.enum(['true', 'false']).optional(),
   APPROVAL_MCP_DATA_DIR: z.string().min(1),
+  APPROVAL_MCP_PLUGINS_DIR: z.string().min(1).optional(),
   APPROVAL_MCP_MASTER_KEY: z.string().min(1),
   APPROVAL_MCP_VAPID_SUBJECT: z.string().min(1).optional(),
 });
@@ -14,6 +15,7 @@ const environmentSchema = z.object({
 export interface ServerConfig {
   publicUrl: URL;
   dataDir: string;
+  pluginsDir: string;
   masterKey: Buffer;
   rpId: string;
   expectedOrigin: string;
@@ -85,6 +87,8 @@ export function loadConfig(
     throw new Error('APPROVAL_MCP_DATA_DIR must be an absolute path');
   }
   const masterKey = Buffer.from(value.APPROVAL_MCP_MASTER_KEY, 'base64');
+  const pluginsDir = value.APPROVAL_MCP_PLUGINS_DIR ?? join(value.APPROVAL_MCP_DATA_DIR, 'plugins');
+  if (!isAbsolute(pluginsDir)) throw new Error('APPROVAL_MCP_PLUGINS_DIR must be an absolute path');
   if (
     masterKey.byteLength !== 32 ||
     masterKey.toString('base64') !== value.APPROVAL_MCP_MASTER_KEY
@@ -111,6 +115,7 @@ export function loadConfig(
   return {
     publicUrl,
     dataDir: value.APPROVAL_MCP_DATA_DIR,
+    pluginsDir,
     masterKey,
     rpId: publicUrl.hostname,
     expectedOrigin: publicUrl.origin,

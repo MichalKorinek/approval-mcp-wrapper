@@ -99,6 +99,7 @@ export async function registerUpstreamRoutes(
     onUpstreamsChanged?(): Promise<void>;
     discoverTools?(upstreamId: UpstreamId): Promise<ToolCatalog>;
     plugins?: readonly Readonly<{ id: string; version: string }>[];
+    getPlugins?(): readonly Readonly<{ id: string; version: string }>[];
   },
 ): Promise<void> {
   app.get('/api/admin/upstreams', async (request, reply) => {
@@ -226,7 +227,7 @@ export async function registerUpstreamRoutes(
     }
     if (
       (body.pluginId !== undefined || body.pluginVersion !== undefined) &&
-      !options.plugins?.some(
+      !(options.getPlugins?.() ?? options.plugins)?.some(
         (plugin) =>
           plugin.id === body.pluginId && plugin.version === body.pluginVersion,
       )
@@ -329,7 +330,8 @@ export async function registerUpstreamRoutes(
     if (
       pluginChanged &&
       !removesPlugin &&
-      !options.plugins?.some(
+      !(body.pluginId === record.pluginId && body.pluginVersion === record.pluginVersion) &&
+      !(options.getPlugins?.() ?? options.plugins)?.some(
         (plugin) =>
           plugin.id === body.pluginId && plugin.version === body.pluginVersion,
       )

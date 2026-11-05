@@ -1,17 +1,79 @@
 # Approval presentation plugins
 
-Open **Upstreams**, edit an MCP connection, and choose its **Presentation plugin**. The plugin pin is stored on that upstream, so two servers of the same type can use different display names and metadata while sharing the same plugin. Existing connections without a plugin continue to use the generic approval view.
+Open **Plugins** (`/plugins`) to manage installations, then **Upstreams**, edit an MCP connection, and choose its **Presentation plugin**. The plugin pin is stored on that upstream, so two servers of the same type can use different display names and metadata while sharing the same plugin. Existing connections without a plugin continue to use the generic approval view.
 
-The built-in plugin IDs are:
+![Plugin management with installed versions and upstream assignments](../media/approval-mcp-plugins.png)
 
-| Plugin ID | Connected server | Covered tools |
+The official catalog contains these independently maintained plugins (not the upstream MCP server implementations):
+
+| Plugin ID | MCP server / repository | Covered tools |
 | --- | --- | ---: |
-| `email` | Mail search and reading | 9 |
-| `geo` | Device location and visits | 8 |
-| `imcp` | macOS contacts, calendar, maps, phone, reminders, weather | 27 |
-| `krkonoskewellness` | Wellness catalog and bookings | 4 |
-| `minutes` | Minutes / Signal | 35 |
-| `whatsapp` | WhatsApp chats and messages | 13 |
+| `email` | [your-mail-mcp](https://github.com/jiridudekusy/approval-mcp-plugin-your-mail-mcp) | 9 |
+| `geo` | [geo / Dawarich](https://github.com/jiridudekusy/approval-mcp-plugin-geo) | 8 |
+| `imcp` | [iMCP](https://github.com/jiridudekusy/approval-mcp-plugin-imcp) | 27 |
+| `krkonoskewellness` | [krkonoskewellness / Reservanto](https://github.com/jiridudekusy/approval-mcp-plugin-krkonoskewellness) | 4 |
+| `minutes` | [Minutes / Signal](https://github.com/jiridudekusy/approval-mcp-plugin-minutes) | 35 |
+| `whatsapp` | [whatsapp-mcp](https://github.com/jiridudekusy/approval-mcp-plugin-whatsapp-mcp) | 13 |
+
+## Installation and persistence
+
+On the first start after upgrading, the server installs the six catalog plugins
+in the background using immutable Git commit pins. Existing plugin IDs,
+versions (`1.0.0`), normalization versions, and upstream assignments are preserved.
+The generic fallback remains part of the server; it needs no download.
+
+Artifacts live at `/data/plugins/<id>/<revision>/plugin.mjs` in the standard
+Docker setup. Installation metadata and enable/disable choices live in the
+configuration state in the same `/data` volume. Keep that volume across image
+updates: no new mount is required. `APPROVAL_MCP_PLUGINS_DIR` can override the
+cache directory; if you do, mount and back up that directory separately.
+
+Restarts verify the local SHA-256 before loading code and do not contact
+GitHub for installed plugins. Failed first installs can be retried with
+**Install**; **Repair installation** restores the exact pinned artifact after
+a missing or corrupt cache. While unavailable, a plugin falls back to generic
+arguments; profile policy and approval requirements still apply. Installation
+errors are visible in Plugins, and do not prevent the HTTP server from starting.
+
+## Managing updates
+
+- **Check for updates** checks the catalog repository's `main` branch. It does
+  not install or execute the update.
+- **Install update** downloads the exact checked revision, verifies its
+  manifest and checksum, and makes the new version available without restart.
+  Existing upstreams keep their exact version pin. Select a new version in
+  **Upstreams** when ready; old versions remain installed alongside it.
+- **Disable** preserves the cached code and assignments but switches those
+  upstreams to generic arguments until the plugin is enabled again.
+- **Uninstall** is allowed only when no upstream references the plugin. It
+  deletes the cached code and prevents automatic reinstallation on restart.
+
+Only the fixed official catalog is supported: arbitrary Git URLs, npm packages,
+and lifecycle scripts are not accepted. Each repository commits a self-contained
+ES module, `plugin.json`, and its SHA-256. The runtime needs neither git nor npm
+to install it. HTTPS and immutable revisions protect transport and pinning;
+this is not a code sandbox. Plugin code runs with server privileges, so review
+and trust repository maintainers before updating. Do not expose management
+endpoints outside authenticated administration. They require a session and CSRF.
+
+To publish a plugin change, update its own repository, bump its package/plugin
+version, run `npm run verify`, and commit the source plus `plugin.json` and
+`dist/plugin.mjs`. Its CI checks tests and reproducible artifacts. Changes to
+normalization semantics must also bump `normalizationVersion`. Reusing a
+version with a different artifact hash is rejected. To add a new MCP plugin,
+add a reviewed repository and initial immutable revision to the server catalog.
+Atlassian, Firecrawl and file-transfer currently use the generic presentation.
+
+## Browser verification
+
+Run `npm run test:plugin-ui` after installing Playwright Chromium. This isolated
+fixture downloads all six real catalog artifacts, tests management actions and
+an offline restart, and checks desktop/mobile layouts in both languages. No
+personal MCP account or production state is used. Set `PLUGIN_SCREENSHOT_DIR`
+to keep the screenshots; otherwise they are temporary. The browser overrides
+documented in [the demo guide](../demo.md) also apply.
+
+## Readable approval details
 
 All plugins provide Czech and English operation titles, highlight the arguments needed to understand the action, retain all arguments in a collapsed technical section, and mark potentially consequential requests with an appropriate risk level. Dates and times are formatted for the viewer in readable fields; raw values remain unchanged in the technical section and upstream call. Unknown future tool names fall back to a generic presentation. The wellness `book` tool is shown as a preview unless `confirm=true`; a confirmed booking is marked dangerous and has no reusable grant scope. Minutes group termination is likewise dangerous and has no reusable scope.
 

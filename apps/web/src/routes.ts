@@ -1,4 +1,4 @@
-export type Page = 'access' | 'history' | 'inbox' | 'system' | 'upstreams';
+export type Page = 'access' | 'history' | 'inbox' | 'system' | 'upstreams' | 'plugins';
 
 export type AppRoute =
   | { page: Page; approvalId?: string }
@@ -10,6 +10,7 @@ export const pagePaths: Record<Page, string> = {
   access: '/access',
   upstreams: '/upstreams',
   system: '/system',
+  plugins: '/plugins',
 };
 
 function normalizedPathname(pathname: string): string {

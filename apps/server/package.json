@@ -5,10 +5,8 @@
   "type": "module",
   "dependencies": {
     "@approval-mcp/call-journal": "0.0.0",
-    "@approval-mcp/connected-plugins": "0.0.0",
     "@approval-mcp/contracts": "0.0.0",
     "@approval-mcp/gateway": "0.0.0",
-    "@approval-mcp/minutes-plugin": "0.0.0",
     "@approval-mcp/plugin-sdk": "0.0.0",
     "@approval-mcp/policy": "0.0.0",
     "@approval-mcp/state-store": "0.0.0",

@@ -7,6 +7,7 @@ export async function registerSystemRoutes(
   app: FastifyInstance,
   options: {
     sessions: SessionService;
+    getPlugins?(): readonly Readonly<{ id: string; version: string; normalizationVersion: number }>[];
     plugins?: readonly Readonly<{
       id: string;
       version: string;
@@ -24,6 +25,6 @@ export async function registerSystemRoutes(
   });
   app.get('/api/admin/plugins', async (request, reply) => {
     if (!await authorizeAdmin(request, reply, options.sessions, false)) return;
-    return options.plugins ?? [];
+    return options.getPlugins?.() ?? options.plugins ?? [];
   });
 }

@@ -29,10 +29,7 @@ import {
   CredentialVault,
   UpstreamRegistry,
 } from '@approval-mcp/upstream';
-import {
-  MinutesApprovalPlugin,
-} from '@approval-mcp/minutes-plugin';
-import { connectedApprovalPlugins } from '@approval-mcp/connected-plugins';
+import { PluginManager } from './plugins/plugin-manager.js';
 import {
   createGenericDescription,
   PluginRegistry,
@@ -105,8 +102,12 @@ const upstreams = new UpstreamRegistry({
   upstreams: configuredUpstreams(),
   credentialVault,
 });
-const pluginRegistry = new PluginRegistry([
-  ...connectedApprovalPlugins({
+const pluginRegistry = new PluginRegistry([]);
+const pluginManager = new PluginManager({
+  directory: config.pluginsDir,
+  state: stateStore,
+  registry: pluginRegistry,
+  host: {
     async findContact(upstreamId, source, identifier) {
       return upstreams.call({
         upstreamId: upstreamId as Upstream['id'],
@@ -149,8 +150,6 @@ const pluginRegistry = new PluginRegistry([
         timeoutMs: 5_000,
       });
     },
-  }),
-  new MinutesApprovalPlugin({
     async readMessage(upstreamId, messageId) {
       return upstreams.call({
         upstreamId: upstreamId as Upstream['id'],
@@ -173,8 +172,9 @@ const pluginRegistry = new PluginRegistry([
       if (typeof text !== 'string') return undefined;
       return JSON.parse(text) as JsonValue;
     },
-  }),
-]);
+  },
+});
+await pluginManager.restore();
 const directPolicies = () =>
   stateStore.read((state) =>
     Object.values(state.policies).map((value) => value as unknown as Policy),
@@ -545,7 +545,8 @@ await registerAdminRoutes(app, {
   broker: approvalBroker,
   historyBroker,
   journal,
-  plugins: pluginRegistry.list(),
+  getPlugins: () => pluginRegistry.list(),
+  pluginManager,
   push: pushNotifications,
   onUpstreamsChanged: async () => {
     await upstreams.replaceUpstreams(configuredUpstreams());
@@ -583,6 +584,7 @@ app.addHook('onClose', async () => {
   clearInterval(catalogRefreshTimer);
   upstreams.off('catalogChanged', onCatalogChanged);
   retention.close();
+  await pluginManager.close();
   await mcpHandler.close();
   await upstreams.close();
   await stateStore.close();
@@ -592,3 +594,4 @@ await app.listen({
   host: process.env['HOST'] ?? '127.0.0.1',
   port: Number(process.env['PORT'] ?? 3000),
 });
+void pluginManager.installDefaults().catch((error: unknown) => app.log.error(error, 'Plugin installation failed'));

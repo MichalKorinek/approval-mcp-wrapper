@@ -15,13 +15,21 @@ export class PluginRegistry {
   private readonly plugins = new Map<string, ApprovalPlugin>();
 
   public constructor(plugins: readonly ApprovalPlugin[]) {
+    this.replace(plugins);
+  }
+
+  /** Swap a validated set atomically; in-flight descriptions keep their instance. */
+  public replace(plugins: readonly ApprovalPlugin[]): void {
+    const next = new Map<string, ApprovalPlugin>();
     for (const plugin of plugins) {
       const key = this.key({ id: plugin.id, version: plugin.version });
-      if (this.plugins.has(key)) {
+      if (next.has(key)) {
         throw new Error(`Duplicate plugin registration: ${key}`);
       }
-      this.plugins.set(key, plugin);
+      next.set(key, plugin);
     }
+    this.plugins.clear();
+    for (const [key, plugin] of next) this.plugins.set(key, plugin);
   }
 
   public async describe(

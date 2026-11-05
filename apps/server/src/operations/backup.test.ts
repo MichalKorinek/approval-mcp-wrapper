@@ -1,4 +1,4 @@
-import { mkdtemp, readFile, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -20,12 +20,16 @@ describe('backup and restore', () => {
       id: 'retention',
       value: { days: 90 },
     });
+    const pluginPath = 'plugins/sample/pinned/plugin.mjs';
+    await mkdir(join(dataDir, 'plugins/sample/pinned'), { recursive: true });
+    await writeFile(join(dataDir, pluginPath), 'export const sample = true;');
 
     const manifest = await createBackup({ dataDir, output, stateStore: store });
 
     expect(manifest.files.some((file) => file.path === 'state.snapshot.json')).toBe(
       true,
     );
+    expect(manifest.files.some((file) => file.path === pluginPath)).toBe(true);
     await expect(
       restoreBackup({
         input: output,

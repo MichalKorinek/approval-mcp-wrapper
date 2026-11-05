@@ -34,6 +34,14 @@ describe('plugin output validation', () => {
 });
 
 describe('PluginRegistry', () => {
+  it('replaces plugins atomically and preserves the old registry on duplicate registration', () => {
+    const plugin: ApprovalPlugin = { id: 'sample', version: '1.0.0', normalizationVersion: 2, async describe() { return createGenericDescription(input); } };
+    const registry = new PluginRegistry([plugin]);
+    expect(() => registry.replace([plugin, plugin])).toThrow('Duplicate');
+    expect(registry.list()).toHaveLength(1);
+    registry.replace([]);
+    expect(registry.list()).toEqual([]);
+  });
   it('returns a generic descriptor when a plugin throws', async () => {
     const plugin: ApprovalPlugin = {
       id: 'signal',

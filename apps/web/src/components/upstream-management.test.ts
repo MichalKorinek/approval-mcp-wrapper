@@ -25,6 +25,8 @@ describe('upstream management UI', () => {
             allowPrivateNetwork: true,
             credentialsConfigured: true,
             version: 3,
+            pluginId: 'minutes',
+            pluginVersion: '1.0.0',
           },
           plugins: [],
           csrfToken: 'csrf',
@@ -42,6 +44,8 @@ describe('upstream management UI', () => {
     expect(html).toContain('value="https://signal.example/mcp"');
     expect(html).not.toContain('Bearer');
     expect(html).toContain('type="password"');
+    expect(html).toContain('value="minutes@1.0.0"');
+    expect(html).toContain('minutes · 1.0.0 (Disabled)');
   });
 
   it('shows cascade impact before removal', () => {

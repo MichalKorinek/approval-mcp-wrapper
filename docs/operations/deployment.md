@@ -12,6 +12,14 @@ Required environment variables:
 
 Optional environment variables:
 
+- `APPROVAL_MCP_PLUGINS_DIR`: absolute directory for installed presentation
+  plugins; defaults to `<APPROVAL_MCP_DATA_DIR>/plugins`. With the standard
+  image this is `/data/plugins`, already covered by the existing volume.
+  First install needs HTTPS access to `raw.githubusercontent.com`; explicit
+  update checks also use `api.github.com`. Installed plugins load offline on
+  restart. No git executable, package installation, or npm scripts are used
+  in the runtime container. [Plugin management](approval-plugins.md).
+
 - `APPROVAL_MCP_OAUTH_ORIGINS`: comma-separated additional HTTPS origins where
   this same server is externally reachable for MCP and OAuth discovery. Each
   origin must have a distinct host and port; the public URL is included

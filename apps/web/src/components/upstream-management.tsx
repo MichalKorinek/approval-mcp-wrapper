@@ -165,6 +165,10 @@ export function UpstreamEditForm({
           <span>{t('upstreams.plugin')}</span>
           <select value={pluginPin} onChange={(event) => setPluginPin(event.target.value)}>
             <option value="">{t('upstreams.noPlugin')}</option>
+            {upstream.pluginId !== undefined && upstream.pluginVersion !== undefined &&
+              !plugins.some((plugin) => plugin.id === upstream.pluginId && plugin.version === upstream.pluginVersion) && (
+                <option value={`${upstream.pluginId}@${upstream.pluginVersion}`}>{upstream.pluginId} · {upstream.pluginVersion} ({t('plugins.disabled')})</option>
+              )}
             {plugins.map((plugin) => (
               <option key={`${plugin.id}@${plugin.version}`} value={`${plugin.id}@${plugin.version}`}>
                 {plugin.id} · {plugin.version}

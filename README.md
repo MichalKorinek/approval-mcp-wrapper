@@ -28,6 +28,9 @@ sent. [Demo script and recording instructions](docs/demo.md).
   upstream or individual tools. Unconfigured tools stay hidden.
 - **Readable approvals:** plugins show the message, contact, chat, event, or
   booking involved. Expand the technical arguments when needed.
+- **Independent plugins:** install, check for updates, enable, or uninstall
+  presentation plugins in **Plugins**. Each has its own Git repository; code
+  is cached in the persistent volume, not downloaded on every restart.
 - **Temporary permissions:** approve once, approve a specific scope, or allow
   the entire tool with any arguments for one hour. Permanent grants are
   available for supported scopes. Active grants can be revoked at any time.
@@ -76,7 +79,11 @@ hostname, so choose a stable server address for ongoing use.
 
 The `approval-mcp-data` volume and the same master key preserve settings,
 active grants, and push device registrations when replacing the image. Keep
-the data volume during upgrades. Pending calls are interrupted by a restart.
+the data volume during upgrades. Installed plugins are preserved there too,
+under `/data/plugins`; your existing `/data` mount is sufficient. First-time
+plugin installation requires outbound HTTPS to `raw.githubusercontent.com`;
+update checks also use `api.github.com`. Later restarts use the local cache.
+Pending calls are interrupted by a restart.
 
 After a successful CI pipeline, the image is also published as
 `ghcr.io/jiridudekusy/approval-mcp-wrapper:latest` for `linux/amd64` and
@@ -193,6 +200,6 @@ apps/server       HTTP server, authentication, OAuth, admin API, Web Push
 apps/web          React UI
 packages/gateway  MCP gateway and approval workflow
 packages/policy   rules, profiles, and permission evaluation
-packages/*        contracts, state store, audit journal, upstream client, plugins
+packages/*        contracts, state store, audit journal, upstream client, plugin SDK
 pocs/             standalone experiments and a test MCP server
 ```

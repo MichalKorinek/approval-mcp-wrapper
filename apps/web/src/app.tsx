@@ -13,6 +13,7 @@ import { OAuthConsent } from './pages/oauth-consent.js';
 import { Upstreams } from './pages/upstreams.js';
 import { Access } from './pages/access.js';
 import { System } from './pages/system.js';
+import { Plugins } from './pages/plugins.js';
 import { History } from './pages/history.js';
 import {
   routeFromLocation,
@@ -169,6 +170,8 @@ export function App() {
         <Access csrfToken={csrfToken} />
       ) : page === 'system' ? (
         <System csrfToken={csrfToken} />
+      ) : page === 'plugins' ? (
+        <Plugins csrfToken={csrfToken} />
       ) : page === 'history' ? (
         <History />
       ) : (

@@ -8,7 +8,8 @@ import { fileURLToPath } from 'node:url';
 import fastifyStatic from '@fastify/static';
 import { chromium } from '@playwright/test';
 import { createCallJournal } from '@approval-mcp/call-journal';
-import { connectedApprovalPlugins } from '@approval-mcp/connected-plugins';
+import { PluginRegistry } from '@approval-mcp/plugin-sdk';
+import { PluginManager } from '../apps/server/dist/plugins/plugin-manager.js';
 import {
   ApprovalOrchestrator,
   PolicyCallCoordinator,
@@ -99,14 +100,21 @@ const contactNames = new Map([
   ['demo-project-team@lid', 'Project team'],
   ['demo-second-chat@lid', 'Organizing team'],
 ]);
-const plugins = connectedApprovalPlugins({
+const registry = new PluginRegistry([]);
+const pluginManager = new PluginManager({
+  directory: join(temporaryDir, 'plugins'), state, registry,
+  host: {
   async findContact(_upstreamId, _source, identifier) {
     return { contacts: [{ jid: identifier, name: contactNames.get(identifier) ?? 'Sample contact' }] };
   },
   async findChat(_upstreamId, identifier) {
     return { jid: identifier, name: contactNames.get(identifier) ?? 'Sample chat' };
   },
+  },
 });
+await pluginManager.restore();
+await pluginManager.installDefaults();
+const plugins = registry.list();
 let simulatedExecutions = 0;
 const coordinator = new PolicyCallCoordinator({
   policies(call) {
@@ -120,7 +128,7 @@ const coordinator = new PolicyCallCoordinator({
   async describe(call) {
     const upstream = upstreams.find((candidate) => candidate.id === call.upstreamId);
     const plugin = plugins.find((candidate) => candidate.id === upstream.pluginId);
-    return { description: await plugin.describe({ ...call, upstreamAlias: upstream.alias }), pluginId: plugin.id, pluginVersion: plugin.version, normalizationVersion: plugin.normalizationVersion };
+    return { description: await registry.describe(plugin, { ...call, upstreamAlias: upstream.alias }), pluginId: plugin.id, pluginVersion: plugin.version, normalizationVersion: plugin.normalizationVersion };
   },
 });
 const signal = new AbortController();
@@ -139,7 +147,7 @@ let browser;
 let context;
 try {
   await registerAdminRoutes(app, {
-    sessions, state, tokens, approvals, journal, broker, historyBroker, plugins,
+    sessions, state, tokens, approvals, journal, broker, historyBroker, getPlugins: () => registry.list(), pluginManager,
     discoverTools: async (upstreamId) => ({ upstreamId, refreshedAt: new Date().toISOString(), tools: (catalogs[upstreamId] ?? []).map((tool) => ({ ...tool, inputSchema: { type: 'object' } })) }),
     push: { publicKey: '', listDevices: () => deviceViews, registerDevice: unavailable, removeDevice: unavailable, testDevice: unavailable },
   });

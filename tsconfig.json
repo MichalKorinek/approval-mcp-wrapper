@@ -17,12 +17,6 @@
       "path": "./packages/plugin-sdk"
     },
     {
-      "path": "./packages/minutes-plugin"
-    },
-    {
-      "path": "./packages/connected-plugins"
-    },
-    {
       "path": "./packages/upstream"
     },
     {
