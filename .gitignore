@@ -1,4 +1,5 @@
 .worktrees/
+.local-data/
 .DS_Store
 /apps.zip
 node_modules/

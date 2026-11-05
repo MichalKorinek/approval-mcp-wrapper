@@ -1,6 +1,7 @@
 .git
 .github
 .worktrees
+.local-data
 node_modules
 **/dist
 **/dist-types
