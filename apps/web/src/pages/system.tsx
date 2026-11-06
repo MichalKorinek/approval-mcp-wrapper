@@ -3,6 +3,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { api } from '../api/client.js';
 import { useI18n } from '../i18n/i18n.js';
 import { Icon } from '../components/icon.js';
+import { StorageControls } from '../components/storage-vault.js';
 import {
   currentPushSubscription,
   defaultPushDeviceName,
@@ -174,6 +175,7 @@ export function System({ csrfToken }: { csrfToken: string }) {
     <section className="page">
       <header className="page-header"><div><h1>{t('system.title')}</h1><p>{t('system.subtitle')}</p></div></header>
       <div className="health-card"><span className="health-ring"><Icon name="check-circle" size={24} /></span><div><h2>{t('system.healthy')}</h2><p>{t('system.runtime')}: <code>{system?.runtime ?? '—'}</code> · {t('system.uptime')}: {system ? formatNumber(system.uptimeSeconds) : '—'} s</p></div></div>
+      <StorageControls csrfToken={csrfToken} />
 
       <section className="push-card" aria-labelledby="push-title">
         <header>

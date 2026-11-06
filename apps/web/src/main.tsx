@@ -2,6 +2,7 @@ import { StrictMode } from 'react';
 import { createRoot } from 'react-dom/client';
 
 import { App } from './app.js';
+import { StorageBoundary } from './components/storage-vault.js';
 import { I18nProvider } from './i18n/i18n.js';
 import { ThemeProvider } from './theme/theme.js';
 import './styles.css';
@@ -13,7 +14,7 @@ createRoot(root).render(
   <StrictMode>
     <ThemeProvider>
       <I18nProvider>
-        <App />
+        <StorageBoundary><App /></StorageBoundary>
       </I18nProvider>
     </ThemeProvider>
   </StrictMode>,

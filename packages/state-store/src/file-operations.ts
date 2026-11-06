@@ -1,6 +1,9 @@
 import { open, mkdir, readFile, rename } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { randomUUID } from 'node:crypto';
+import { basename } from 'node:path';
+import type { StorageCodec } from '@approval-mcp/contracts';
+import { encodeLines, decodeLines } from './storage-cipher.js';
 
 export interface StateStoreFileOperations {
   appendDurable(path: string, contents: string): Promise<void>;
@@ -18,12 +21,12 @@ async function syncDirectory(path: string): Promise<void> {
   }
 }
 
-export function createNodeFileOperations(): StateStoreFileOperations {
+export function createNodeFileOperations(codec?: StorageCodec): StateStoreFileOperations {
   return {
     async appendDurable(path, contents) {
       const file = await open(path, 'a', 0o600);
       try {
-        await file.writeFile(contents, 'utf8');
+        await file.writeFile(codec === undefined ? contents : encodeLines(codec, basename(path), contents), 'utf8');
         await file.sync();
       } finally {
         await file.close();
@@ -34,7 +37,8 @@ export function createNodeFileOperations(): StateStoreFileOperations {
     },
     async readText(path) {
       try {
-        return await readFile(path, 'utf8');
+        const source = await readFile(path, 'utf8');
+        return codec === undefined ? source : decodeLines(codec, basename(path), source);
       } catch (error) {
         if (
           error instanceof Error &&
@@ -51,7 +55,7 @@ export function createNodeFileOperations(): StateStoreFileOperations {
       const temporaryPath = join(parent, `.${randomUUID()}.tmp`);
       const file = await open(temporaryPath, 'wx', 0o600);
       try {
-        await file.writeFile(contents, 'utf8');
+        await file.writeFile(codec === undefined ? contents : encodeLines(codec, basename(path), contents), 'utf8');
         await file.sync();
       } finally {
         await file.close();

@@ -111,9 +111,18 @@ interface PushNotificationServiceOptions {
   sender?: PushSender;
   generateVapidKeys?(): webPush.VapidKeys;
   now?(): Date;
+  onBootstrapChanged?(value: BootstrapPushConfig): Promise<void>;
 }
 
-class PushSecretVault {
+/** Deliberate cold-start exception: delivery material, never the storage key. */
+export interface BootstrapPushConfig {
+  subject: string;
+  publicKey: string;
+  privateKey: string;
+  devices: { locale: string; subscription: BrowserPushSubscription }[];
+}
+
+export class PushSecretVault {
   readonly #masterKey: Buffer;
 
   constructor(masterKey: Uint8Array) {
@@ -165,7 +174,7 @@ function endpointHash(endpoint: string): string {
   return createHash('sha256').update(endpoint).digest('hex');
 }
 
-function assertTrustedPushEndpoint(endpoint: string): void {
+export function assertTrustedPushEndpoint(endpoint: string): void {
   const url = new URL(endpoint);
   const hostname = url.hostname.toLowerCase();
   const trusted =
@@ -229,6 +238,7 @@ function toView(record: PushDeviceRecord): PushDeviceView {
 }
 
 export class PushNotificationService {
+  readonly #onBootstrapChanged: PushNotificationServiceOptions['onBootstrapChanged'];
   readonly #state: ConfigStateStore;
   readonly #vault: PushSecretVault;
   readonly #sender: PushSender;
@@ -248,6 +258,7 @@ export class PushNotificationService {
     this.#vapidSubject = options.vapidSubject;
     this.publicKey = keys.publicKey;
     this.#privateKey = keys.privateKey;
+    this.#onBootstrapChanged = options.onBootstrapChanged;
   }
 
   static async create(
@@ -281,7 +292,9 @@ export class PushNotificationService {
         ),
       };
     }
-    return new PushNotificationService(options, keys);
+    const service = new PushNotificationService(options, keys);
+    await service.#syncBootstrap();
+    return service;
   }
 
   listDevices(): readonly PushDeviceView[] {
@@ -333,6 +346,7 @@ export class PushNotificationService {
         : { lastDeliveredAt: existing.lastDeliveredAt }),
     };
     await this.#save(record);
+    await this.#syncBootstrap();
     return toView(record);
   }
 
@@ -346,6 +360,7 @@ export class PushNotificationService {
       collection: 'pushDevices',
       id,
     });
+    await this.#syncBootstrap();
     return true;
   }
 
@@ -489,6 +504,16 @@ export class PushNotificationService {
       collection: 'pushDevices',
       id: expected.id,
     });
+    await this.#syncBootstrap();
+  }
+
+  async #syncBootstrap(): Promise<void> {
+    if (this.#onBootstrapChanged === undefined) return;
+    const devices = this.#state.read((state) => Object.values(state.pushDevices).map((value) => {
+      const device = pushDeviceRecordSchema.parse(value);
+      return { locale: device.locale, subscription: browserPushSubscriptionSchema.parse(this.#vault.decrypt(`device:${device.id}:subscription`, device.subscription)) };
+    }));
+    await this.#onBootstrapChanged({ subject: this.#vapidSubject, publicKey: this.publicKey, privateKey: this.#privateKey, devices });
   }
 
   async #save(record: PushDeviceRecord): Promise<void> {

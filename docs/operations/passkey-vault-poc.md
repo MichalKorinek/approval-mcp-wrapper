@@ -1,5 +1,9 @@
 # Passkey vault proof of concept
 
+The production implementation now has its own
+[encrypted-storage migration and deployment guide](encrypted-storage.md).
+This standalone experiment remains separate and is never a migration source.
+
 This is a **separate, experimental app**, not encryption of production Approval
 MCP storage. It never loads the production configuration, passkeys, credentials,
 master key, plugin code, or audit history. Do not put real secrets into it or
@@ -90,12 +94,12 @@ iCloud Keychain, third-party passkey managers or hardware keys. Record the
 actual browser/OS/provider combination and verify repeated unwrap and recovery
 before committing to production encryption.
 
-Production integration still needs a separate reviewed migration: encrypting
-configuration, call segments and indexes; authenticated unlock bootstrap outside
-the encrypted state; multiple enrolled passkey wrapping slots; lock lifecycle
-and readiness/MCP behavior; backup/restore and interrupted migration recovery;
-and removal of plaintext keys and legacy data copies. Keeping the old plaintext
-master key in `.env` would defeat the new locked-at-start security property.
+The separate production implementation now covers state/history encryption,
+multiple wrapping slots, cold-start readiness/MCP gating, and resumable migration.
+Use its [deployment guide](encrypted-storage.md), not this experimental app,
+to migrate data. A real deployment still needs a tested backup, provider-specific
+verification and a controlled rollout. Keeping the old plaintext master key
+in `.env` intentionally selects automatic unlock instead of passkey-only startup.
 Untrusted plugin execution is another boundary: encrypted-at-rest storage does
 not protect an unlocked server from a malicious plugin running with its permissions.
 

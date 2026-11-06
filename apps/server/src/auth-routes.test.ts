@@ -14,6 +14,14 @@ import { buildServerApp } from './app.js';
 describe('server configuration', () => {
   const masterKey = Buffer.alloc(32, 7).toString('base64');
 
+  it('allows locked startup without an environment key, including an empty Compose value', () => {
+    const base = { APPROVAL_MCP_PUBLIC_URL: 'http://localhost:43127', APPROVAL_MCP_DATA_DIR: '/tmp/data' };
+    expect(loadConfig(base).masterKey).toBeUndefined();
+    expect(loadConfig({ ...base, APPROVAL_MCP_MASTER_KEY: '' }).masterKey).toBeUndefined();
+    expect(loadConfig({ ...base, APPROVAL_MCP_UNLOCK_NOTIFICATIONS: 'false' }).unlockNotifications).toBe(false);
+    expect(() => loadConfig({ ...base, APPROVAL_MCP_MASTER_KEY: 'invalid-key' })).toThrow('canonical');
+  });
+
   it('requires HTTPS outside exact loopback development hosts', () => {
     expect(() =>
       loadConfig({

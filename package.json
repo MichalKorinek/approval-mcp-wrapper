@@ -14,6 +14,7 @@
     "test": "node --test scripts/*.test.mjs && node examples/passkey-vault-poc/crypto.test.mjs && node examples/passkey-vault-poc/server.test.mjs && vitest run",
     "poc:passkey-vault": "node examples/passkey-vault-poc/server.mjs",
     "test:passkey-vault-ui": "node scripts/verify-passkey-vault.mjs",
+    "test:storage-vault-ui": "npm run build && node scripts/verify-storage-vault.mjs",
     "typecheck": "tsc -b",
     "build": "tsc -b && npm run build -w @approval-mcp/web",
     "demo:record": "npm run build && node scripts/record-demo.mjs",

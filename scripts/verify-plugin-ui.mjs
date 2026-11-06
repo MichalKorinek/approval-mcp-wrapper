@@ -59,6 +59,7 @@ try {
     sessions, state, tokens: new TokenService(new StateStoreTokenRepository(state)),
     getPlugins: () => registry.list(), pluginManager: manager,
   });
+  app.get('/api/storage/status', async (request) => ({ locked: false, initialized: true, environmentUnlock: true, primaryOrigin: `http://${request.headers.host}`, csrf: 'ui-fixture', legacyKeyRequired: false, recoveryAvailable: false, bootstrapNotifications: true, slots: [] }));
   await app.register(fastifyStatic, { root: resolve('apps/web/dist'), wildcard: false });
   app.setNotFoundHandler((request, reply) => request.url.startsWith('/api/') ? reply.code(404).send({}) : reply.sendFile('index.html'));
   const origin = await app.listen({ host: '127.0.0.1', port: 0 });

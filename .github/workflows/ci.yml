@@ -36,6 +36,7 @@ jobs:
         run: |
           npm run test:plugin-ui
           npm run test:passkey-vault-ui
+          npm run test:storage-vault-ui
       - name: Generate CycloneDX SBOM
         run: npm sbom --sbom-format cyclonedx > approval-mcp-wrapper.cdx.json
       - name: Upload SBOM
@@ -110,7 +111,7 @@ jobs:
 
           ready=false
           for attempt in {1..40}; do
-            if curl --fail --silent http://127.0.0.1:3000/health/ready \
+            if curl --fail --silent -H 'Host: localhost:3000' http://127.0.0.1:3000/health/ready \
               | jq --exit-status '.ready == true' >/dev/null; then
               ready=true
               break
@@ -123,7 +124,7 @@ jobs:
             exit 1
           fi
 
-          root_status="$(curl --silent --output /dev/null --write-out '%{http_code}' http://127.0.0.1:3000/)"
+          root_status="$(curl --silent -H 'Host: localhost:3000' --output /dev/null --write-out '%{http_code}' http://127.0.0.1:3000/)"
           test "$root_status" = 200
 
           # No production catalog or automatic installs. Use an explicit,
@@ -157,7 +158,7 @@ jobs:
           offline_ready=false
           for attempt in {1..40}; do
             if docker exec "$container_name" node --input-type=module -e '
-              const response = await fetch("http://127.0.0.1:3000/health/ready");
+              const response = await fetch("http://127.0.0.1:3000/health/ready", { headers: { Host: "localhost:3000" } });
               process.exit(response.ok && (await response.json()).ready ? 0 : 1);
             ' 2>/dev/null; then
               offline_ready=true

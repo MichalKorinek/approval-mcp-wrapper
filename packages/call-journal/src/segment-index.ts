@@ -3,6 +3,10 @@ import { dirname, join } from 'node:path';
 import { randomUUID } from 'node:crypto';
 
 import type { CallEvent } from './call-event.js';
+import type { StorageCodec } from '@approval-mcp/contracts';
+import { basename } from 'node:path';
+import { promisify } from 'node:util';
+import { gunzip } from 'node:zlib';
 
 export interface SegmentIndexRecord {
   offset: number;
@@ -32,8 +36,9 @@ export function indexRecord(event: CallEvent, offset: number, length: number): S
   };
 }
 
-export async function rebuildSegmentIndex(segmentPath: string, indexPath: string): Promise<void> {
-  const source = await readFile(segmentPath);
+export async function rebuildSegmentIndex(segmentPath: string, indexPath: string, codec?: StorageCodec): Promise<void> {
+  const raw = await readFile(segmentPath);
+  const source = segmentPath.endsWith('.gz') ? await promisify(gunzip)(raw) : raw;
   const records: string[] = [];
   let offset = 0;
 
@@ -44,10 +49,11 @@ export async function rebuildSegmentIndex(segmentPath: string, indexPath: string
     const length = Buffer.byteLength(lineWithNewline);
     if (line.length > 0) {
       try {
-        const event = JSON.parse(line) as CallEvent;
-        records.push(JSON.stringify(indexRecord(event, offset, length)));
+        const event = JSON.parse(codec?.decode(`calls/${basename(segmentPath).replace(/\.gz$/, '')}`, line) ?? line) as CallEvent;
+        const record = JSON.stringify(indexRecord(event, offset, length));
+        records.push(codec?.encode(`calls/${basename(indexPath)}`, record) ?? record);
       } catch {
-        if (offset + length !== source.length) {
+        if (codec !== undefined || offset + length !== source.length) {
           throw new Error(`Invalid non-terminal JSONL record at byte ${offset}`);
         }
       }
@@ -64,4 +70,6 @@ export async function rebuildSegmentIndex(segmentPath: string, indexPath: string
     await file.close();
   }
   await rename(temporaryPath, indexPath);
+  const directory = await open(dirname(indexPath), 'r');
+  try { await directory.sync(); } finally { await directory.close(); }
 }

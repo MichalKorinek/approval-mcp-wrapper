@@ -25,6 +25,10 @@ sent. [Demo script and recording instructions](docs/demo.md).
 
 ## Features
 
+- **Encrypted storage:** configuration and call history are encrypted on disk.
+  Keep the existing environment key for automatic startup unlock, or register
+  storage passkeys and require unlock after restart. Locked startup can notify
+  your registered devices. [Migration and security boundaries](docs/operations/encrypted-storage.md).
 - **Access profiles:** allow, require approval, or deny access to an entire
   upstream or individual tools. Unconfigured tools stay hidden.
 - **Readable approvals:** plugins show the message, contact, chat, event, or
@@ -58,7 +62,7 @@ openssl rand -base64 32
 ```
 
 Paste the generated key into `.env` as `APPROVAL_MCP_MASTER_KEY`. Keep the
-same key for subsequent runs: it encrypts upstream credentials and Web Push
+same key for subsequent runs: it encrypts storage, upstream credentials and Web Push
 data. Keep `.env` out of Git.
 
 ```bash
@@ -193,6 +197,7 @@ tool only simulates a deployment.
 | Recovering data after a failure | [Disaster recovery](docs/operations/disaster-recovery.md) |
 | Protocol support, OAuth, and built-in MCP tools | [MCP compatibility](docs/operations/mcp-compatibility.md) |
 | Presentation plugins and their behavior | [Plugins](docs/operations/approval-plugins.md) |
+| Encrypted storage, passkey unlock, migration, startup notifications | [Encrypted storage](docs/operations/encrypted-storage.md) |
 | Experimental passkey-derived storage encryption | [Isolated vault PoC](docs/operations/passkey-vault-poc.md) |
 
 Health endpoints are `/health/live` and `/health/ready`. The supported

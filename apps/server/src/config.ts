@@ -8,7 +8,8 @@ const environmentSchema = z.object({
   APPROVAL_MCP_ALLOW_INSECURE_OAUTH_PRIVATE_HTTP: z.enum(['true', 'false']).optional(),
   APPROVAL_MCP_DATA_DIR: z.string().min(1),
   APPROVAL_MCP_PLUGINS_DIR: z.string().min(1).optional(),
-  APPROVAL_MCP_MASTER_KEY: z.string().min(1),
+  APPROVAL_MCP_MASTER_KEY: z.preprocess((value) => value === '' ? undefined : value, z.string().min(1).optional()),
+  APPROVAL_MCP_UNLOCK_NOTIFICATIONS: z.enum(['true', 'false']).optional(),
   APPROVAL_MCP_VAPID_SUBJECT: z.string().min(1).optional(),
 });
 
@@ -16,12 +17,13 @@ export interface ServerConfig {
   publicUrl: URL;
   dataDir: string;
   pluginsDir: string;
-  masterKey: Buffer;
+  masterKey: Buffer | undefined;
   rpId: string;
   expectedOrigin: string;
   oauthOrigins: readonly string[];
   secureCookies: boolean;
   vapidSubject: string;
+  unlockNotifications: boolean;
 }
 
 function assertVapidSubject(value: string): void {
@@ -86,12 +88,12 @@ export function loadConfig(
   if (!isAbsolute(value.APPROVAL_MCP_DATA_DIR)) {
     throw new Error('APPROVAL_MCP_DATA_DIR must be an absolute path');
   }
-  const masterKey = Buffer.from(value.APPROVAL_MCP_MASTER_KEY, 'base64');
+  const masterKey = value.APPROVAL_MCP_MASTER_KEY === undefined ? undefined : Buffer.from(value.APPROVAL_MCP_MASTER_KEY, 'base64');
   const pluginsDir = value.APPROVAL_MCP_PLUGINS_DIR ?? join(value.APPROVAL_MCP_DATA_DIR, 'plugins');
   if (!isAbsolute(pluginsDir)) throw new Error('APPROVAL_MCP_PLUGINS_DIR must be an absolute path');
   if (
-    masterKey.byteLength !== 32 ||
-    masterKey.toString('base64') !== value.APPROVAL_MCP_MASTER_KEY
+    masterKey !== undefined && (masterKey.byteLength !== 32 ||
+    masterKey.toString('base64') !== value.APPROVAL_MCP_MASTER_KEY)
   ) {
     throw new Error(
       'APPROVAL_MCP_MASTER_KEY must be a canonical base64-encoded 32-byte key',
@@ -122,5 +124,6 @@ export function loadConfig(
     oauthOrigins,
     secureCookies: publicUrl.protocol === 'https:',
     vapidSubject,
+    unlockNotifications: value.APPROVAL_MCP_UNLOCK_NOTIFICATIONS !== 'false',
   };
 }

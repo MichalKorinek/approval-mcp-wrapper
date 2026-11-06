@@ -8,6 +8,7 @@ dist-types/
 coverage/
 playwright-report/
 test-results/
+/artifacts/storage-vault/
 *.log
 *.tsbuildinfo
 .env

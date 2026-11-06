@@ -8,10 +8,15 @@ Required environment variables:
 
 - `APPROVAL_MCP_PUBLIC_URL`: externally visible HTTPS origin, with no path.
 - `APPROVAL_MCP_DATA_DIR`: absolute persistent directory; `/data` in the image.
-- `APPROVAL_MCP_MASTER_KEY`: canonical base64 encoding of 32 random bytes.
 
 Optional environment variables:
 
+- `APPROVAL_MCP_MASTER_KEY`: original canonical base64 encoding of 32 random
+  bytes. Required for legacy migration; when present, automatically unlocks
+  storage at startup. Without it, an enrolled storage passkey/recovery key
+  must unlock the server. See [Encrypted storage](encrypted-storage.md).
+- `APPROVAL_MCP_UNLOCK_NOTIFICATIONS=false`: disable locked-start push and
+  remove its separate delivery-credential file; default is enabled.
 - `APPROVAL_MCP_PLUGINS_DIR`: absolute directory for installed presentation
   plugins; defaults to `<APPROVAL_MCP_DATA_DIR>/plugins`. With the standard
   image this is `/data/plugins`, already covered by the existing volume.
@@ -68,7 +73,9 @@ test-only flag above. Current MCP SDK clients reject its HTTP token endpoint;
 use an HTTPS alias or a sandbox-side localhost port forward instead.
 
 Web Push VAPID keys are generated once and persisted under `/data`; the private
-key and every browser subscription are encrypted with the master key. A
+key and every browser subscription are encrypted with the master key in the
+main vault. Startup unlock notifications require a separate delivery-only
+copy outside that vault; see the [notification exception](encrypted-storage.md#notification-delivery-while-locked). A
 production deployment must use its public HTTPS URL for notifications. On
 iPhone and iPad, install the site to the Home Screen before enabling
 notifications. Registered devices can be reviewed, tested individually, and

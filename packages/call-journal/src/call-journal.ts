@@ -16,6 +16,7 @@ import type {
 } from './call-event.js';
 import { appendDurable } from './segment-writer.js';
 import { indexRecord } from './segment-index.js';
+import type { StorageCodec } from '@approval-mcp/contracts';
 
 export interface CallJournal {
   readonly recovery: JournalRecovery;
@@ -154,6 +155,7 @@ class FileCallJournal implements CallJournal {
   public constructor(
     private readonly dataDir: string,
     private readonly onEventAppended?: CallEventAppendedListener,
+    private readonly codec?: StorageCodec,
   ) {}
 
   public async load(): Promise<void> {
@@ -164,12 +166,12 @@ class FileCallJournal implements CallJournal {
   }
 
   public async append(event: CallEvent): Promise<void> {
-    const serialized = `${JSON.stringify(event)}\n`;
     const path = join(this.dataDir, segmentName(event.timestamp));
+    const serialized = `${this.codec?.encode(`calls/${basename(path)}`, JSON.stringify(event)) ?? JSON.stringify(event)}\n`;
     const offset = await appendDurable(path, serialized);
     const indexPath = path.replace(/\.jsonl$/, '.index.jsonl');
     const record = indexRecord(event, offset, Buffer.byteLength(serialized));
-    await appendDurable(indexPath, `${JSON.stringify(record)}\n`);
+    await appendDurable(indexPath, `${this.codec?.encode(`calls/${basename(indexPath)}`, JSON.stringify(record)) ?? JSON.stringify(record)}\n`);
     this.onEventAppended?.(structuredClone(event));
   }
 
@@ -352,9 +354,13 @@ class FileCallJournal implements CallJournal {
 
   private async readEvents(path: string, trackRecovery: boolean): Promise<CallEvent[]> {
     const raw = await readFile(path);
-    const source = path.endsWith('.gz')
+    let source = path.endsWith('.gz')
       ? (await gunzipAsync(raw)).toString('utf8')
       : raw.toString('utf8');
+    if (this.codec !== undefined) {
+      const context = `calls/${basename(path).replace(/\.gz$/, '')}`;
+      source = source.split('\n').map((line) => line === '' ? '' : this.codec!.decode(context, line)).join('\n');
+    }
     const lines = source.split('\n');
     const events: CallEvent[] = [];
     for (const [index, line] of lines.entries()) {
@@ -383,8 +389,9 @@ class FileCallJournal implements CallJournal {
 export async function createCallJournal(
   dataDir: string,
   onEventAppended?: CallEventAppendedListener,
+  codec?: StorageCodec,
 ): Promise<CallJournal> {
-  const journal = new FileCallJournal(dataDir, onEventAppended);
+  const journal = new FileCallJournal(dataDir, onEventAppended, codec);
   await journal.load();
   return journal;
 }

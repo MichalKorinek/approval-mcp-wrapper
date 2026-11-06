@@ -146,6 +146,7 @@ const app = await buildServerApp({ auth: {
 } });
 let browser;
 let context;
+app.get('/api/storage/status', async (request) => ({ locked: false, initialized: true, environmentUnlock: true, primaryOrigin: `http://${request.headers.host}`, csrf: 'demo-fixture', legacyKeyRequired: false, recoveryAvailable: false, bootstrapNotifications: true, slots: [] }));
 try {
   await registerAdminRoutes(app, {
     sessions, state, tokens, approvals, journal, broker, historyBroker, getPlugins: () => registry.list(), pluginManager,

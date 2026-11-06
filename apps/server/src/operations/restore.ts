@@ -9,6 +9,8 @@ import {
 import { dirname, join, normalize, resolve } from 'node:path';
 
 import { createConfigStateStore } from '@approval-mcp/state-store';
+import { createNodeFileOperations } from '@approval-mcp/state-store';
+import { StorageVault } from '../storage-vault.js';
 
 import {
   checksum,
@@ -36,7 +38,8 @@ export async function restoreBackup(options: {
   input: string;
   target: string;
   dryRun: boolean;
-}): Promise<{ valid: true; fileCount: number }> {
+  masterKey?: Uint8Array;
+}): Promise<{ valid: true; fileCount: number; decryptionValidated: boolean }> {
   const input = resolve(options.input);
   const manifest = JSON.parse(
     await readFile(join(input, 'manifest.json'), 'utf8'),
@@ -55,6 +58,7 @@ export async function restoreBackup(options: {
   }
 
   const temporary = await mkdtemp(join(dirname(resolve(options.target)), '.restore-'));
+  let installed = false;
   try {
     for (const file of manifest.files) {
       await durableCopy(
@@ -62,18 +66,31 @@ export async function restoreBackup(options: {
         safePath(temporary, file.path),
       );
     }
-    const store = await createConfigStateStore(temporary);
-    await store.close();
+    let decryptionValidated = true;
+    const storage = await StorageVault.open(temporary, 'http://localhost');
+    if (storage.manifest === undefined) {
+      const store = await createConfigStateStore(temporary);
+      await store.close();
+    } else if (options.masterKey === undefined) {
+      decryptionValidated = false;
+    } else {
+      try {
+        await storage.unlock(options.masterKey);
+        const store = await createConfigStateStore(storage.runtimeDir, createNodeFileOperations(storage.codec!));
+        await store.close();
+      } finally { storage.destroy(); }
+    }
     if (!options.dryRun) {
       await mkdir(dirname(resolve(options.target)), {
         recursive: true,
         mode: 0o700,
       });
       await rename(temporary, resolve(options.target));
+      installed = true;
     }
-    return { valid: true, fileCount: manifest.files.length };
+    return { valid: true, fileCount: manifest.files.length, decryptionValidated };
   } finally {
-    if (options.dryRun) {
+    if (!installed) {
       await rm(temporary, { recursive: true, force: true });
     }
   }
