@@ -11,6 +11,7 @@ import { StateStoreTokenRepository, TokenService } from '@approval-mcp/gateway';
 import { buildServerApp } from '../apps/server/dist/app.js';
 import { registerAdminRoutes } from '../apps/server/dist/admin/index.js';
 import { PluginManager } from '../apps/server/dist/plugins/plugin-manager.js';
+import { addSamplePlugins } from './plugin-fixtures.mjs';
 import { InMemoryRecoveryRepository, RecoveryService } from '../apps/server/dist/recovery-service.js';
 import { InMemorySessionRepository, SessionService } from '../apps/server/dist/session-store.js';
 
@@ -28,7 +29,8 @@ let browser;
 let app;
 try {
   await manager.restore();
-  await manager.installDefaults();
+  assert.equal(manager.list().length, 0);
+  await addSamplePlugins(manager);
   assert.equal(registry.list().length, 6, JSON.stringify(manager.list()));
   const description = await registry.describe({ id: 'whatsapp', version: '1.0.0' }, {
     upstreamId: 'sample-whatsapp', upstreamAlias: 'whatsapp', toolName: 'send_message',
@@ -90,8 +92,18 @@ try {
   assert.equal(await used.getByRole('button', { name: 'Uninstall', exact: true }).isDisabled(), true);
   await geo.getByRole('button', { name: 'Uninstall', exact: true }).click();
   await action('Uninstall');
-  await geo.getByText('Not installed', { exact: true }).waitFor();
-  await action('Install');
+  await geo.waitFor({ state: 'detached' });
+  await page.getByRole('button', { name: 'Add plugin', exact: true }).click();
+  await page.getByLabel('GitHub repository URL', { exact: true }).fill('https://github.com/jiridudekusy/approval-mcp-plugin-geo');
+  await page.getByRole('button', { name: 'Preview plugin', exact: true }).click();
+  await page.getByRole('heading', { name: 'Geo / Dawarich · v1.0.0', exact: true }).waitFor();
+  assert.equal(await page.getByRole('button', { name: 'Trust and install', exact: true }).isDisabled(), true);
+  assert.equal(registry.list().length, 5, 'Preview must not execute the plugin');
+  await page.screenshot({ path: join(output, 'plugins-install-preview.png'), fullPage: true });
+  await page.getByRole('checkbox', { name: /I trust this repository/ }).check();
+  const installed = page.waitForResponse((response) => response.request().method() === 'POST' && response.url().endsWith('/api/admin/plugins/sources'));
+  await page.getByRole('button', { name: 'Trust and install', exact: true }).click();
+  assert.equal((await installed).status(), 201);
   await geo.getByText('Enabled', { exact: true }).waitFor();
   await page.reload();
   await page.locator('.managed-plugin-card').first().waitFor();
@@ -108,7 +120,6 @@ try {
   const offlineFetch = async () => { throw new Error('Restart must not contact GitHub'); };
   const restarted = new PluginManager({ directory: join(directory, 'plugins'), state, registry, host, fetch: offlineFetch });
   await restarted.restore();
-  await restarted.installDefaults();
   assert.equal(registry.list().length, 6);
   await restarted.close();
   console.log(`Plugin UI verified: six real repositories, actions, offline restart, desktop/mobile/English/Czech. Screenshots: ${output}`);

@@ -15,8 +15,9 @@ Optional environment variables:
 - `APPROVAL_MCP_PLUGINS_DIR`: absolute directory for installed presentation
   plugins; defaults to `<APPROVAL_MCP_DATA_DIR>/plugins`. With the standard
   image this is `/data/plugins`, already covered by the existing volume.
-  First install needs HTTPS access to `raw.githubusercontent.com`; explicit
-  update checks also use `api.github.com`. Installed plugins load offline on
+  Adding a repository and checking updates need HTTPS to `api.github.com`;
+  manifests and code use `raw.githubusercontent.com`. A fresh server has no
+  plugins; users add repositories in Plugins. Installed plugins load offline on
   restart. No git executable, package installation, or npm scripts are used
   in the runtime container. [Plugin management](approval-plugins.md).
 

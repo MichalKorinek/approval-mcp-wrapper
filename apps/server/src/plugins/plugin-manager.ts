@@ -6,9 +6,11 @@ import { pathToFileURL } from 'node:url';
 import type { JsonValue, Upstream } from '@approval-mcp/contracts';
 import { PluginRegistry, type ApprovalPlugin } from '@approval-mcp/plugin-sdk';
 import type { ConfigStateStore } from '@approval-mcp/state-store';
-import { z } from 'zod';
-
-import { PLUGIN_CATALOG, type PluginCatalogEntry } from './catalog.js';
+import { LEGACY_PLUGIN_SOURCES } from './legacy-sources.js';
+import {
+  installationSchema, manifestSchema, parsePluginRepository, pluginRecordSchema, revisionSchema,
+  type Installation, type Manifest, type PluginRecord, type PluginSource,
+} from './plugin-source.js';
 
 export interface PluginHost {
   findContact(upstreamId: string, source: 'whatsapp' | 'imcp', identifier: string): Promise<unknown>;
@@ -20,30 +22,8 @@ export interface PluginHost {
   readJson(upstreamId: string, uri: string): Promise<JsonValue | undefined>;
 }
 
-const revisionSchema = z.string().regex(/^[a-f0-9]{40}$/);
-const manifestSchema = z.object({
-  apiVersion: z.literal(1),
-  id: z.string().regex(/^[a-z][a-z0-9-]{0,63}$/),
-  name: z.string().min(1).max(120),
-  description: z.string().max(1000),
-  version: z.string().regex(/^\d+\.\d+\.\d+(?:-[a-zA-Z0-9.-]+)?$/),
-  normalizationVersion: z.number().int().positive(),
-  entry: z.literal('plugin.mjs'),
-  sha256: z.string().regex(/^[a-f0-9]{64}$/),
-});
-const installationSchema = manifestSchema.extend({
-  revision: revisionSchema,
-  installedAt: z.iso.datetime(),
-});
-const recordSchema = z.object({
-  enabled: z.boolean(),
-  autoInstall: z.boolean(),
-  installations: z.array(installationSchema).max(50),
-});
-type Manifest = z.infer<typeof manifestSchema>;
-type Installation = z.infer<typeof installationSchema>;
-type PluginRecord = z.infer<typeof recordSchema>;
 interface Release { revision: string; manifest: Manifest }
+interface Preview { source: PluginSource; release: Release; owner: string; expiresAt: number }
 
 export class PluginManagerError extends Error {
   constructor(readonly code: string, readonly status = 400) {
@@ -59,7 +39,7 @@ export class PluginManager {
   private readonly busy = new Set<string>();
   private queue: Promise<unknown> = Promise.resolve();
   private closing = false;
-  private readonly catalog: readonly PluginCatalogEntry[];
+  private readonly previews = new Map<string, Preview>();
   private readonly fetcher: typeof fetch;
 
   constructor(private readonly options: {
@@ -67,25 +47,31 @@ export class PluginManager {
     state: ConfigStateStore;
     registry: PluginRegistry;
     host: PluginHost;
-    catalog?: readonly PluginCatalogEntry[];
     fetch?: typeof fetch;
   }) {
-    this.catalog = options.catalog ?? PLUGIN_CATALOG;
     this.fetcher = options.fetch ?? fetch;
-    for (const item of this.catalog) {
-      manifestSchema.shape.id.parse(item.id);
-      revisionSchema.parse(item.revision);
-      if (!/^[a-zA-Z0-9-]+\/[a-zA-Z0-9_.-]+$/.test(item.repository)) throw new Error('Invalid plugin repository');
-    }
   }
 
   /** Load only verified local artifacts. No network requests on restart. */
   async restore(): Promise<void> {
-    for (const entry of this.catalog) {
-      const record = this.record(entry.id);
-      if (this.options.state.read((state) => state.plugins[entry.id]) === undefined) {
-        await this.save(entry.id, record);
+    // Preserve old installations offline. Remove old empty auto-install entries.
+    for (const [id, raw] of this.options.state.read((state) => Object.entries(state.plugins))) {
+      if (typeof raw === 'object' && raw !== null && !Array.isArray(raw) && raw.schemaVersion === 2) continue;
+      const source = LEGACY_PLUGIN_SOURCES.find((item) => item.id === id);
+      if (source === undefined || typeof raw !== 'object' || raw === null || Array.isArray(raw)) {
+        throw new Error(`Unknown legacy plugin record: ${id}`);
       }
+      const installations = installationSchema.array().parse(raw.installations);
+      const used = this.options.state.read((state) => Object.values(state.upstreams).some((upstream) =>
+        typeof upstream === 'object' && upstream !== null && !Array.isArray(upstream) && upstream.pluginId === id));
+      if (installations.length === 0 && !used) {
+        await this.options.state.mutate({ type: 'record.deleted', collection: 'plugins', id });
+      } else {
+        await this.save(id, pluginRecordSchema.parse({ ...source, schemaVersion: 2, enabled: raw.enabled, installations }));
+      }
+    }
+    for (const record of this.records()) {
+      const entry = record;
       for (const installed of record.installations) {
         try {
           if (record.enabled) {
@@ -104,25 +90,41 @@ export class PluginManager {
     this.refreshRegistry();
   }
 
-  /** Fresh installations happen after HTTP starts; failures remain visible in UI. */
-  async installDefaults(): Promise<void> {
-    for (const entry of this.catalog) {
-      if (this.closing) return;
-      const record = this.record(entry.id);
-      if (!record.autoInstall || record.installations.length > 0) continue;
-      await this.exclusive(entry.id, async (entry) => {
-        const latest = this.record(entry.id);
-        if (this.closing || !latest.autoInstall || latest.installations.length > 0) return;
-        await this.installRelease(entry, await this.release(entry, entry.revision));
-      }).catch(() => undefined);
-    }
+  /** Preview only downloads metadata. No plugin module is fetched or executed. */
+  async preview(repositoryUrl: unknown, owner: string) {
+    let repository: string;
+    try { repository = parsePluginRepository(repositoryUrl); }
+    catch { throw new PluginManagerError('plugin.invalid_repository'); }
+    for (const [id, preview] of this.previews) if (preview.expiresAt <= Date.now()) this.previews.delete(id);
+    if (this.previews.size >= 100) throw new PluginManagerError('plugin.too_many_previews', 429);
+    const revision = await this.head(repository);
+    const release = await this.release({ repository }, revision);
+    const source = { id: release.manifest.id, name: release.manifest.name, repository, revision };
+    this.validateSource(source, release);
+    const previewId = randomUUID();
+    const expiresAt = Date.now() + 5 * 60_000;
+    this.previews.set(previewId, { owner, source, release, expiresAt });
+    return { previewId, expiresAt: new Date(expiresAt).toISOString(), ...release.manifest,
+      repository: `https://github.com/${repository}`, revision };
+  }
+
+  add(previewId: string, owner: string): Promise<void> {
+    return this.enqueue(async () => {
+      const preview = this.previews.get(previewId);
+      if (preview === undefined || preview.owner !== owner || preview.expiresAt <= Date.now()) {
+        throw new PluginManagerError('plugin.preview_expired', 409);
+      }
+      this.previews.delete(previewId);
+      this.validateSource(preview.source, preview.release);
+      await this.installRelease(preview.source, preview.release);
+    });
   }
 
   list() {
     const upstreams = this.options.state.read((state) =>
       Object.values(state.upstreams) as unknown as Upstream[]);
-    return this.catalog.map((entry) => {
-      const record = this.record(entry.id);
+    return this.records().map((record) => {
+      const entry = record;
       return {
         id: entry.id,
         name: entry.name,
@@ -160,10 +162,7 @@ export class PluginManager {
 
   checkUpdate(id: string): Promise<void> {
     return this.exclusive(id, async (entry) => {
-      const response = JSON.parse(await this.download(
-        `https://api.github.com/repos/${entry.repository}/git/ref/heads/main`, 16_000,
-      )) as { object?: { sha?: unknown } };
-      const revision = revisionSchema.parse(response.object?.sha);
+      const revision = await this.head(entry.repository);
       const release = await this.release(entry, revision);
       const installed = this.record(id).installations.find((item) => item.version === release.manifest.version);
       if (installed !== undefined && installed.sha256 !== release.manifest.sha256) {
@@ -203,11 +202,11 @@ export class PluginManager {
       if (this.list().find((item) => item.id === id)!.usedBy.length > 0) {
         throw new PluginManagerError('plugin.in_use', 409);
       }
-      await this.save(id, { enabled: false, autoInstall: false, installations: [] });
+      await this.options.state.mutate({ type: 'record.deleted', collection: 'plugins', id });
       for (const key of this.instances.keys()) if (key.startsWith(`${id}@`)) this.instances.delete(key);
       for (const key of this.verified) if (key.startsWith(`${id}@`)) this.verified.delete(key);
       this.refreshRegistry();
-      // The ID is resolved against the fixed catalog, never an arbitrary path.
+      // The ID is validated by the manifest schema, never an arbitrary path.
       await rm(join(this.options.directory, id), { recursive: true, force: true });
       this.available.delete(id);
     });
@@ -218,9 +217,10 @@ export class PluginManager {
     await this.queue;
   }
 
-  private async installRelease(entry: PluginCatalogEntry, release: Release): Promise<void> {
+  private async installRelease(entry: PluginSource, release: Release): Promise<void> {
     const { manifest, revision } = release;
-    const record = this.record(entry.id);
+    this.validateSource(entry, release);
+    const record = this.findRecord(entry.id) ?? { ...entry, schemaVersion: 2 as const, enabled: true, autoInstall: false as const, installations: [] };
     const existing = record.installations.find((item) => item.version === manifest.version);
     if (existing !== undefined && existing.sha256 !== manifest.sha256) {
       throw new PluginManagerError('plugin.version_reused', 409);
@@ -278,13 +278,13 @@ export class PluginManager {
     return plugin;
   }
 
-  private async release(entry: PluginCatalogEntry, revision: string): Promise<Release> {
+  private async release(entry: Pick<PluginSource, 'repository'> & Partial<Pick<PluginSource, 'id'>>, revision: string): Promise<Release> {
     const manifest = manifestSchema.parse(JSON.parse(await this.download(this.rawUrl(entry, revision, 'plugin.json'), 16_000)));
-    if (manifest.id !== entry.id) throw new PluginManagerError('plugin.invalid_manifest');
+    if ('id' in entry && manifest.id !== entry.id) throw new PluginManagerError('plugin.invalid_manifest');
     return { manifest, revision };
   }
 
-  private rawUrl(entry: PluginCatalogEntry, revision: string, file: string) {
+  private rawUrl(entry: Pick<PluginSource, 'repository'>, revision: string, file: string) {
     return `https://raw.githubusercontent.com/${entry.repository}/${revision}/${file}`;
   }
 
@@ -309,13 +309,47 @@ export class PluginManager {
     return Buffer.concat(chunks).toString('utf8');
   }
 
+  private records(): PluginRecord[] {
+    return this.options.state.read((state) => Object.entries(state.plugins).map(([id, raw]) => {
+      const record = pluginRecordSchema.parse(raw);
+      if (record.id !== id || record.installations.some((item) => item.id !== id)) throw new Error('Invalid plugin identity');
+      return record;
+    }));
+  }
+
+  private findRecord(id: string): PluginRecord | undefined {
+    return this.records().find((record) => record.id === id);
+  }
+
   private record(id: string): PluginRecord {
-    const raw = this.options.state.read((state) => state.plugins[id]);
-    return raw === undefined ? { enabled: true, autoInstall: true, installations: [] } : recordSchema.parse(raw);
+    const record = this.findRecord(id);
+    if (record === undefined) throw new PluginManagerError('plugin.not_found', 404);
+    return record;
+  }
+
+  private validateSource(source: PluginSource, release: Release) {
+    const current = this.findRecord(source.id);
+    if (current !== undefined && current.repository !== source.repository) throw new PluginManagerError('plugin.source_conflict', 409);
+    const installed = current?.installations.find((item) => item.version === release.manifest.version);
+    if (installed !== undefined && installed.sha256 !== release.manifest.sha256) throw new PluginManagerError('plugin.version_reused', 409);
+    if (this.records().some((item) => item.repository === source.repository && item.id !== source.id)) {
+      throw new PluginManagerError('plugin.source_conflict', 409);
+    }
+  }
+
+  private async head(repository: string): Promise<string> {
+    const metadata = JSON.parse(await this.download(`https://api.github.com/repos/${repository}`, 32_000)) as { default_branch?: unknown };
+    if (typeof metadata.default_branch !== 'string' || metadata.default_branch.length === 0 || metadata.default_branch.length > 200) {
+      throw new PluginManagerError('plugin.invalid_repository');
+    }
+    const reference = JSON.parse(await this.download(
+      `https://api.github.com/repos/${repository}/git/ref/heads/${encodeURIComponent(metadata.default_branch)}`, 16_000,
+    )) as { object?: { sha?: unknown } };
+    return revisionSchema.parse(reference.object?.sha);
   }
 
   private save(id: string, record: PluginRecord) {
-    return this.options.state.mutate({ type: 'record.upserted', collection: 'plugins', id, value: record as unknown as JsonValue });
+    return this.options.state.mutate({ type: 'record.upserted', collection: 'plugins', id, value: pluginRecordSchema.parse(record) as unknown as JsonValue });
   }
 
   private refreshRegistry() {
@@ -325,10 +359,9 @@ export class PluginManager {
   private key(id: string, version: string) { return `${id}@${version}`; }
   private hash(source: string) { return createHash('sha256').update(source).digest('hex'); }
 
-  private exclusive(id: string, operation: (entry: PluginCatalogEntry) => Promise<void>): Promise<void> {
-    const entry = this.catalog.find((item) => item.id === id);
-    if (entry === undefined) return Promise.reject(new PluginManagerError('plugin.not_found', 404));
-    const queued = this.queue.then(async () => {
+  private exclusive(id: string, operation: (entry: PluginRecord) => Promise<void>): Promise<void> {
+    return this.enqueue(async () => {
+      const entry = this.record(id);
       this.busy.add(id);
       try {
         await operation(entry);
@@ -338,6 +371,11 @@ export class PluginManager {
         throw error;
       } finally { this.busy.delete(id); }
     });
+  }
+
+  private enqueue(operation: () => Promise<void>): Promise<void> {
+    if (this.closing) return Promise.reject(new PluginManagerError('plugin.closing', 503));
+    const queued = this.queue.then(operation);
     this.queue = queued.catch(() => undefined);
     return queued;
   }

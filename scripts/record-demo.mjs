@@ -10,6 +10,7 @@ import { chromium } from '@playwright/test';
 import { createCallJournal } from '@approval-mcp/call-journal';
 import { PluginRegistry } from '@approval-mcp/plugin-sdk';
 import { PluginManager } from '../apps/server/dist/plugins/plugin-manager.js';
+import { addSamplePlugins } from './plugin-fixtures.mjs';
 import {
   ApprovalOrchestrator,
   PolicyCallCoordinator,
@@ -113,7 +114,7 @@ const pluginManager = new PluginManager({
   },
 });
 await pluginManager.restore();
-await pluginManager.installDefaults();
+await addSamplePlugins(pluginManager);
 const plugins = registry.list();
 let simulatedExecutions = 0;
 const coordinator = new PolicyCallCoordinator({
@@ -244,6 +245,16 @@ try {
   await page.getByText('Demo Mac · Safari', { exact: true }).waitFor();
   await scene('06 / Manage your notifications', 'Named devices, Test, and Remove in one place. This demo does not send system notifications.');
   await pause(3_500);
+  await click(page.locator('[data-route="/plugins"]').first());
+  await page.getByRole('heading', { name: 'Presentation plugins', exact: true }).waitFor();
+  await scene('07 / Plugins from your repositories', 'No fixed catalog. Add a public GitHub repository, review its exact commit, and explicitly trust the code before installation.');
+  await click(page.getByRole('button', { name: 'Add plugin', exact: true }));
+  await page.getByLabel('GitHub repository URL', { exact: true }).fill('https://github.com/jiridudekusy/approval-mcp-plugin-geo');
+  await click(page.getByRole('button', { name: 'Preview plugin', exact: true }));
+  await page.getByRole('heading', { name: 'Geo / Dawarich · v1.0.0', exact: true }).waitFor();
+  assert.equal(await page.getByRole('button', { name: 'Trust and install', exact: true }).isDisabled(), true);
+  await pause(3_000);
+  await click(page.getByRole('button', { name: 'Cancel', exact: true }));
   await click(page.getByRole('button', { name: 'Dark theme', exact: true }).first());
   await pause(2_000);
   await scene('Start at localhost:43127', 'Find Docker setup, OAuth client configuration, profiles, and backup instructions in the README.');

@@ -15,6 +15,16 @@ interface ManagedPlugin {
   update: { version: string; revision: string } | null;
 }
 type Action = 'install' | 'check' | 'update' | 'enable' | 'disable' | 'remove';
+interface PluginPreview {
+  previewId: string;
+  id: string;
+  name: string;
+  description: string;
+  version: string;
+  repository: string;
+  revision: string;
+  sha256: string;
+}
 
 export function Plugins({ csrfToken }: { csrfToken: string }) {
   const { t, formatDate } = useI18n();
@@ -22,15 +32,54 @@ export function Plugins({ csrfToken }: { csrfToken: string }) {
   const [busy, setBusy] = useState<string>();
   const [feedback, setFeedback] = useState<{ error: boolean; text: string }>();
   const [confirmation, setConfirmation] = useState<{ id: string; action: 'disable' | 'remove' }>();
-  const load = useCallback(() => api<ManagedPlugin[]>('/api/admin/plugins/catalog').then(setPlugins), []);
+  const [adding, setAdding] = useState(false);
+  const [repository, setRepository] = useState('');
+  const [preview, setPreview] = useState<PluginPreview>();
+  const [trustCode, setTrustCode] = useState(false);
+  const load = useCallback(() => api<ManagedPlugin[]>('/api/admin/plugins/sources').then(setPlugins), []);
+
+  const operationError = (error: unknown) => error instanceof ApiError && error.code === 'plugin.source_conflict'
+    ? t('plugins.sourceConflict') : error instanceof ApiError && error.code === 'plugin.invalid_repository'
+      ? t('plugins.invalidRepository') : error instanceof ApiError && error.code === 'plugin.preview_expired'
+        ? t('plugins.previewExpired') : t('plugins.failed');
+
+  async function previewRepository() {
+    setBusy('preview');
+    setFeedback(undefined);
+    setPreview(undefined);
+    setTrustCode(false);
+    try {
+      setPreview(await api<PluginPreview>('/api/admin/plugins/preview', {
+        method: 'POST', body: JSON.stringify({ repository }),
+      }, csrfToken));
+    } catch (error) { setFeedback({ error: true, text: operationError(error) }); }
+    finally { setBusy(undefined); }
+  }
+
+  async function confirmInstall() {
+    if (preview === undefined || !trustCode) return;
+    setBusy('add');
+    setFeedback(undefined);
+    try {
+      setPlugins(await api<ManagedPlugin[]>('/api/admin/plugins/sources', {
+        method: 'POST', body: JSON.stringify({ previewId: preview.previewId, trustCode: true }),
+      }, csrfToken));
+      setAdding(false);
+      setRepository('');
+      setPreview(undefined);
+      setTrustCode(false);
+      setFeedback({ error: false, text: t('plugins.saved') });
+    } catch (error) { setFeedback({ error: true, text: operationError(error) }); }
+    finally { setBusy(undefined); }
+  }
 
   useEffect(() => {
     let active = true;
-    const refresh = () => void api<ManagedPlugin[]>('/api/admin/plugins/catalog')
+    const refresh = () => void api<ManagedPlugin[]>('/api/admin/plugins/sources')
       .then((value) => { if (active) setPlugins(value); })
       .catch(() => { if (active) setFeedback({ error: true, text: t('plugins.failed') }); });
     refresh();
-    // Also reflect first-start background installs and changes in another tab.
+    // Reflect changes in another admin tab without downloading plugin code.
     const timer = setInterval(refresh, 5_000);
     return () => { active = false; clearInterval(timer); };
   }, [t]);
@@ -59,11 +108,30 @@ export function Plugins({ csrfToken }: { csrfToken: string }) {
   return (
     <section className="page">
       <header className="page-header"><div><h1>{t('plugins.title')}</h1><p>{t('plugins.subtitle')}</p></div>
-        <span className="plugin-count">{active} / {plugins?.length ?? 0} {t('plugins.active')}</span>
+        <div className="plugin-header-actions"><span className="plugin-count">{active} / {plugins?.length ?? 0} {t('plugins.active')}</span>
+          <button className="primary compact" type="button" disabled={busy !== undefined} onClick={() => setAdding(true)}>{t('plugins.add')}</button></div>
       </header>
       <aside className="plugin-storage-note"><Icon name="shield-check" size={22} /><div><strong>{t('plugins.storageTitle')}</strong><p>{t('plugins.storageHint')}</p></div></aside>
       <p className="muted plugin-trust-note">{t('plugins.trustHint')}</p>
       {feedback !== undefined && <p role="status" className={feedback.error ? 'error' : 'success'}>{feedback.text}</p>}
+      {adding && <section className="plugin-add-panel" aria-labelledby="plugin-add-title">
+        <h2 id="plugin-add-title">{t('plugins.add')}</h2><p>{t('plugins.addHint')}</p>
+        <form onSubmit={(event) => { event.preventDefault(); void previewRepository(); }}>
+          <label>{t('plugins.repository')}<input type="url" required maxLength={250} value={repository} placeholder="https://github.com/owner/plugin-repository" disabled={busy !== undefined}
+            onChange={(event) => { setRepository(event.target.value); setPreview(undefined); setTrustCode(false); }} /></label>
+          <button className="secondary-button compact" type="submit" disabled={busy !== undefined || repository.trim() === ''}>{t('plugins.preview')}</button>
+        </form>
+        {preview !== undefined && <div className="plugin-install-preview">
+          <h3>{preview.name} · v{preview.version}</h3><p>{preview.description}</p>
+          <dl><div><dt>{t('plugins.repository')}</dt><dd>{preview.repository}</dd></div>
+            <div><dt>{t('plugins.revision')}</dt><dd><code>{preview.revision}</code></dd></div>
+            <div><dt>SHA-256</dt><dd><code>{preview.sha256}</code></dd></div></dl>
+          <label className="check-row"><input type="checkbox" checked={trustCode} disabled={busy !== undefined} onChange={(event) => setTrustCode(event.target.checked)} /><span>{t('plugins.trustCode')}</span></label>
+          <button className="primary compact" type="button" disabled={!trustCode || busy !== undefined} onClick={() => void confirmInstall()}>{t('plugins.confirmInstall')}</button>
+        </div>}
+        <button className="secondary-button compact" type="button" disabled={busy !== undefined} onClick={() => { setAdding(false); setPreview(undefined); setTrustCode(false); }}>{t('common.cancel')}</button>
+      </section>}
+      {plugins?.length === 0 && !adding && <div className="empty-panel record-empty"><Icon name="chip" size={28} /><h2>{t('plugins.empty')}</h2><p>{t('plugins.emptyHint')}</p></div>}
       {plugins === undefined ? <p aria-busy="true">{t('common.loading')}</p> : (
         <div className="managed-plugin-grid">
           {plugins.map((plugin) => {

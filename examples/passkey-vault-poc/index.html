@@ -1,0 +1,16 @@
+<!doctype html>
+<html lang="en">
+  <head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Passkey Vault PoC · Approval MCP</title><link rel="stylesheet" href="/style.css"></head>
+  <body><main>
+    <header><span class="eyebrow">APPROVAL MCP / ISOLATED EXPERIMENT</span><span id="state" class="state">Loading</span>
+      <h1>A vault that waits<br>for your passkey.</h1><p class="intro">Test real passkey-derived encryption, a locked server restart, and recovery. No production data or existing Approval MCP keys are used.</p></header>
+    <aside class="notice"><strong>Not production storage encryption.</strong> This separate PoC encrypts one synthetic message. PRF-derived wrapping keys stay in the browser; the unlocked data key is sent directly to this server and held in process memory. It is not end-to-end encryption against the running server.</aside>
+    <p id="feedback" class="feedback" role="status" aria-live="polite"></p>
+    <section id="setup" class="card"><span class="number">01 / SET UP</span><h2>Create an encrypted test vault</h2><p>Two explicit steps: register a passkey, then evaluate PRF and create the vault. If PRF is unsupported, setup stops without a weaker login-only fallback.</p><div class="actions"><button id="create">Create with passkey</button><button id="finish-setup" hidden>Finish encrypted setup</button><button id="restart-setup" class="secondary" hidden>Start setup over</button></div></section>
+    <section id="unlock-section" class="card" hidden><span class="number">02 / UNLOCK</span><h2>Bring the vault online</h2><p>After each server restart, use your original passkey. Keep the same hostname and port for this experiment.</p><div class="actions"><button id="unlock">Unlock with passkey</button><button id="lock" class="secondary">Lock vault</button></div>
+      <details><summary>Use a recovery key instead</summary><label for="recovery-code">Recovery key</label><input id="recovery-code" type="password" autocomplete="off" spellcheck="false"><button id="recover" class="secondary">Recover vault</button></details></section>
+    <section id="recovery-output" class="card recovery" hidden><h2>Save this recovery key</h2><p>This key is displayed only now. Save it outside this browser. It is not written to the vault file, logs, or browser storage. Losing both your passkey and this key makes the test vault unrecoverable.</p><label for="new-recovery-code">New recovery key</label><input id="new-recovery-code" readonly autocomplete="off" spellcheck="false"><button id="dismiss-recovery" class="secondary">I saved it — hide the key</button></section>
+    <section id="sample-section" class="card sample" hidden><span class="number">03 / DECRYPTED SAMPLE</span><h2 id="sample"></h2><p>This plaintext is available only to an authenticated PoC session while the server holds its active data key.</p></section>
+    <footer>Separate app · encrypted sample file · no production migration · no analytics</footer>
+  </main><script type="module" src="/app.mjs"></script></body>
+</html>

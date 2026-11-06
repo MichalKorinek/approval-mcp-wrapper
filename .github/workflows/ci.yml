@@ -30,6 +30,12 @@ jobs:
         run: npm ci
       - name: Verify source and production build
         run: npm run verify
+      - name: Install verification browser
+        run: npx playwright install --with-deps chromium
+      - name: Verify plugin management and isolated PRF vault in browser
+        run: |
+          npm run test:plugin-ui
+          npm run test:passkey-vault-ui
       - name: Generate CycloneDX SBOM
         run: npm sbom --sbom-format cyclonedx > approval-mcp-wrapper.cdx.json
       - name: Upload SBOM
@@ -120,22 +126,23 @@ jobs:
           root_status="$(curl --silent --output /dev/null --write-out '%{http_code}' http://127.0.0.1:3000/)"
           test "$root_status" = 200
 
-          # Initial installs are asynchronous. Verify all catalog entries were
-          # durably installed before replacing the container with no network.
-          plugins_ready=false
-          for attempt in {1..120}; do
-            if docker exec "$container_name" node --input-type=module -e '
-              import { createConfigStateStore } from "@approval-mcp/state-store";
-              const state = await createConfigStateStore("/data");
-              const installed = state.read(s => Object.values(s.plugins).filter(p => p.installations?.length > 0));
-              process.exit(installed.length === 6 ? 0 : 1);
-            '; then
-              plugins_ready=true
-              break
-            fi
-            sleep 0.5
-          done
-          test "$plugins_ready" = true
+          # No production catalog or automatic installs. Use an explicit,
+          # separate fixture state so the live server remains its only writer.
+          docker exec "$container_name" node --input-type=module -e '
+            import { createConfigStateStore } from "@approval-mcp/state-store";
+            import { PluginRegistry } from "@approval-mcp/plugin-sdk";
+            import { PluginManager } from "./apps/server/dist/plugins/plugin-manager.js";
+            import { addSamplePlugins } from "./scripts/plugin-fixtures.mjs";
+            const state = await createConfigStateStore("/data/plugin-smoke/state");
+            const registry = new PluginRegistry([]);
+            const manager = new PluginManager({ directory: "/data/plugin-smoke/cache", state, registry, host: {} });
+            await manager.restore();
+            if (manager.list().length !== 0) throw new Error("Fresh state must have no plugins");
+            await addSamplePlugins(manager);
+            if (registry.list().length !== 6) throw new Error("Fixture installation failed");
+            await manager.close();
+            await state.close();
+          '
 
           docker rm --force "$container_name" >/dev/null
           docker run --detach \
@@ -163,11 +170,10 @@ jobs:
             import { createConfigStateStore } from "@approval-mcp/state-store";
             import { PluginRegistry } from "@approval-mcp/plugin-sdk";
             import { PluginManager } from "./apps/server/dist/plugins/plugin-manager.js";
-            const state = await createConfigStateStore("/data");
+            const state = await createConfigStateStore("/data/plugin-smoke/state");
             const registry = new PluginRegistry([]);
-            const manager = new PluginManager({ directory: "/data/plugins", state, registry, host: {}, fetch: async () => { throw new Error("Offline restart must use cache"); } });
+            const manager = new PluginManager({ directory: "/data/plugin-smoke/cache", state, registry, host: {}, fetch: async () => { throw new Error("Offline restart must use cache"); } });
             await manager.restore();
-            await manager.installDefaults();
             if (registry.list().length !== 6) throw new Error("Missing cached plugins");
             await manager.close();
           '

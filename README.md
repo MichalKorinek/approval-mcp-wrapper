@@ -18,7 +18,8 @@ MCP client → Approval MCP → your MCP servers
 [Watch the short demo (WebM)](docs/media/approval-mcp-demo.webm)
 
 The video covers upstreams, profiles, message approval, one-hour tool-wide
-permission without recipient restrictions, history, and notification devices.
+permission without recipient restrictions, history, notification devices, and
+adding presentation plugins from your own repositories.
 It uses sample data only: no real WhatsApp messages or push notifications are
 sent. [Demo script and recording instructions](docs/demo.md).
 
@@ -29,8 +30,9 @@ sent. [Demo script and recording instructions](docs/demo.md).
 - **Readable approvals:** plugins show the message, contact, chat, event, or
   booking involved. Expand the technical arguments when needed.
 - **Independent plugins:** install, check for updates, enable, or uninstall
-  presentation plugins in **Plugins**. Each has its own Git repository; code
-  is cached in the persistent volume, not downloaded on every restart.
+  presentation plugins in **Plugins**. Add your own public GitHub repository,
+  review its pinned version and explicitly trust its code. There is no fixed
+  catalog or automatic installation. Code is cached in the persistent volume.
 - **Temporary permissions:** approve once, approve a specific scope, or allow
   the entire tool with any arguments for one hour. Permanent grants are
   available for supported scopes. Active grants can be revoked at any time.
@@ -80,9 +82,10 @@ hostname, so choose a stable server address for ongoing use.
 The `approval-mcp-data` volume and the same master key preserve settings,
 active grants, and push device registrations when replacing the image. Keep
 the data volume during upgrades. Installed plugins are preserved there too,
-under `/data/plugins`; your existing `/data` mount is sufficient. First-time
-plugin installation requires outbound HTTPS to `raw.githubusercontent.com`;
-update checks also use `api.github.com`. Later restarts use the local cache.
+under `/data/plugins`; your existing `/data` mount is sufficient. Adding a
+repository and checking updates require HTTPS to `api.github.com`; code and
+manifests are downloaded from `raw.githubusercontent.com`. Later restarts use
+the local cache without GitHub requests. A fresh server starts with no plugins.
 Pending calls are interrupted by a restart.
 
 After a successful CI pipeline, the image is also published as
@@ -95,6 +98,8 @@ the build above uses your current checkout.
 1. In **Upstreams**, add your MCP server's Streamable HTTP URL. Set its alias,
    display name, description, optional credentials, and presentation plugin.
    Metadata can distinguish work and personal email accounts, for example.
+   For a specialized presentation, first use **Plugins → Add plugin** to add
+   its repository, preview the exact commit, and confirm that you trust its code.
 2. Select **Discover tools**. Enable private network access when intentionally
    connecting to a local or private network address.
 3. Configure rules in **Access → Profiles**. Start with read-only tools and
@@ -188,6 +193,7 @@ tool only simulates a deployment.
 | Recovering data after a failure | [Disaster recovery](docs/operations/disaster-recovery.md) |
 | Protocol support, OAuth, and built-in MCP tools | [MCP compatibility](docs/operations/mcp-compatibility.md) |
 | Presentation plugins and their behavior | [Plugins](docs/operations/approval-plugins.md) |
+| Experimental passkey-derived storage encryption | [Isolated vault PoC](docs/operations/passkey-vault-poc.md) |
 
 Health endpoints are `/health/live` and `/health/ready`. The supported
 deployment runs one writer over a single data directory. MCP Tasks are not
@@ -202,4 +208,5 @@ packages/gateway  MCP gateway and approval workflow
 packages/policy   rules, profiles, and permission evaluation
 packages/*        contracts, state store, audit journal, upstream client, plugin SDK
 pocs/             standalone experiments and a test MCP server
+examples/         isolated passkey-derived encryption proof of concept
 ```

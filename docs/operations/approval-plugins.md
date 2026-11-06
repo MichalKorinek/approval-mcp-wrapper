@@ -1,10 +1,23 @@
 # Approval presentation plugins
 
-Open **Plugins** (`/plugins`) to manage installations, then **Upstreams**, edit an MCP connection, and choose its **Presentation plugin**. The plugin pin is stored on that upstream, so two servers of the same type can use different display names and metadata while sharing the same plugin. Existing connections without a plugin continue to use the generic approval view.
+Open **Plugins** (`/plugins`) and choose **Add plugin**. Enter a public HTTPS
+GitHub repository URL, preview its metadata and pinned commit, then explicitly
+confirm that you trust its code. Preview does not download or execute the
+plugin module. Confirmation installs the exact reviewed commit, not a branch
+that may have moved in the meantime. Previews expire after five minutes and
+belong to the admin session that created them.
+
+![Reviewing a repository before trusting and installing its code](../media/approval-mcp-plugin-preview.png)
+
+Then edit an MCP connection in **Upstreams** and select its **Presentation
+plugin**. The version pin is stored on that upstream. Existing connections
+without a plugin continue to use the generic approval view.
 
 ![Plugin management with installed versions and upstream assignments](../media/approval-mcp-plugins.png)
 
-The official catalog contains these independently maintained plugins (not the upstream MCP server implementations):
+There is no fixed catalog and nothing is installed automatically. These
+independent repositories are examples you can choose to add (not the MCP
+server implementations themselves):
 
 | Plugin ID | MCP server / repository | Covered tools |
 | --- | --- | ---: |
@@ -17,10 +30,17 @@ The official catalog contains these independently maintained plugins (not the up
 
 ## Installation and persistence
 
-On the first start after upgrading, the server installs the six catalog plugins
-in the background using immutable Git commit pins. Existing plugin IDs,
-versions (`1.0.0`), normalization versions, and upstream assignments are preserved.
-The generic fallback remains part of the server; it needs no download.
+Fresh installations start with an empty plugin list. The list of repositories
+you add is persisted in configuration state, not compiled into the image. New
+repositories do not require a wrapper rebuild. The generic fallback remains
+part of the server and needs no download.
+
+On upgrade from the old catalog-based version, installed plugins are migrated
+offline to records containing their original source repository. IDs, versions,
+normalization versions, cached code and upstream assignments are preserved.
+Old empty catalog entries with no upstream assignment are removed. A referenced
+but incomplete old installation remains visible for explicit repair; it is not
+silently downloaded. The historical source map is migration-only, not a catalog.
 
 Artifacts live at `/data/plugins/<id>/<revision>/plugin.mjs` in the standard
 Docker setup. Installation metadata and enable/disable choices live in the
@@ -29,15 +49,15 @@ updates: no new mount is required. `APPROVAL_MCP_PLUGINS_DIR` can override the
 cache directory; if you do, mount and back up that directory separately.
 
 Restarts verify the local SHA-256 before loading code and do not contact
-GitHub for installed plugins. Failed first installs can be retried with
-**Install**; **Repair installation** restores the exact pinned artifact after
+GitHub for installed plugins. Failed additions can be retried with a new preview;
+**Repair installation** restores the exact pinned artifact after
 a missing or corrupt cache. While unavailable, a plugin falls back to generic
 arguments; profile policy and approval requirements still apply. Installation
 errors are visible in Plugins, and do not prevent the HTTP server from starting.
 
 ## Managing updates
 
-- **Check for updates** checks the catalog repository's `main` branch. It does
+- **Check for updates** checks your repository's default branch. It does
   not install or execute the update.
 - **Install update** downloads the exact checked revision, verifies its
   manifest and checksum, and makes the new version available without restart.
@@ -46,28 +66,31 @@ errors are visible in Plugins, and do not prevent the HTTP server from starting.
 - **Disable** preserves the cached code and assignments but switches those
   upstreams to generic arguments until the plugin is enabled again.
 - **Uninstall** is allowed only when no upstream references the plugin. It
-  deletes the cached code and prevents automatic reinstallation on restart.
+  deletes its repository record and cached code. Nothing returns on restart.
 
-Only the fixed official catalog is supported: arbitrary Git URLs, npm packages,
-and lifecycle scripts are not accepted. Each repository commits a self-contained
+Public GitHub repositories are supported; arbitrary hosts, credentials in URLs,
+private repositories, npm packages, and lifecycle scripts are not accepted.
+Each repository commits a self-contained
 ES module, `plugin.json`, and its SHA-256. The runtime needs neither git nor npm
 to install it. HTTPS and immutable revisions protect transport and pinning;
 this is not a code sandbox. Plugin code runs with server privileges, so review
-and trust repository maintainers before updating. Do not expose management
+and trust repository maintainers before adding or updating it. A checksum proves
+integrity, not that code is safe. A second repository cannot take over an
+existing plugin ID. Do not expose management
 endpoints outside authenticated administration. They require a session and CSRF.
 
 To publish a plugin change, update its own repository, bump its package/plugin
 version, run `npm run verify`, and commit the source plus `plugin.json` and
 `dist/plugin.mjs`. Its CI checks tests and reproducible artifacts. Changes to
 normalization semantics must also bump `normalizationVersion`. Reusing a
-version with a different artifact hash is rejected. To add a new MCP plugin,
-add a reviewed repository and initial immutable revision to the server catalog.
+version with a different artifact hash is rejected. Users can add its repository
+directly in the UI; no change to the server image or source is required.
 Atlassian, Firecrawl and file-transfer currently use the generic presentation.
 
 ## Browser verification
 
 Run `npm run test:plugin-ui` after installing Playwright Chromium. This isolated
-fixture downloads all six real catalog artifacts, tests management actions and
+fixture explicitly adds six example repositories, tests management actions and
 an offline restart, and checks desktop/mobile layouts in both languages. No
 personal MCP account or production state is used. Set `PLUGIN_SCREENSHOT_DIR`
 to keep the screenshots; otherwise they are temporary. The browser overrides

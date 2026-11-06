@@ -9,8 +9,9 @@ simulated MCP responses, and a sample list of push devices. No upstream or
 push provider is contacted. The approval workflow, grant persistence, call
 history, and their presentation in the app are real.
 
-Recording downloads the official presentation plugins from their public
-repositories into its temporary fixture cache. Outbound HTTPS to GitHub is
+Recording explicitly adds six example presentation plugin repositories into
+its temporary fixture cache. This is demo setup, not automatic installation in
+the production server. Outbound HTTPS to GitHub is
 required; no real MCP server or personal account is contacted.
 
 ## Walkthrough
@@ -25,6 +26,9 @@ required; no real MCP server or personal account is contacted.
 6. History and a call timeline.
 7. Notification devices with Test and Remove buttons. Actual system
    notification delivery is neither simulated nor recorded.
+8. User-added plugin repositories: exact-commit preview and explicit code
+   trust before installation, with no fixed catalog. The demo cancels this
+   preview because its fixture already explicitly installed those examples.
 
 ## Record the demo again
 

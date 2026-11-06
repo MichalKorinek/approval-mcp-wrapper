@@ -1,13 +1,8 @@
-export interface PluginCatalogEntry {
-  id: string;
-  name: string;
-  repository: string;
-  revision: string;
-}
+import type { PluginSource } from './plugin-source.js';
 
-// Only reviewed repositories are installable. First installs are immutable,
-// explicit update checks can discover a newer revision on the same repository.
-export const PLUGIN_CATALOG: readonly PluginCatalogEntry[] = [
+// Migration only. These are NOT a catalog and are NEVER automatically installed.
+// Old records did not store their source repository, so upgrades need this map.
+export const LEGACY_PLUGIN_SOURCES: readonly PluginSource[] = [
   ['email', 'your-mail-mcp', '7fee27f847e3e77afbce8e5c9b5d463f17990de2', 'your-mail-mcp'],
   ['geo', 'Geo / Dawarich', '2f9ca6e3d347314eb894f41af11acca7cb351a11'],
   ['imcp', 'iMCP', 'ca186e9bdef0e4b9e9e1292029c2bdfcc85465f9'],

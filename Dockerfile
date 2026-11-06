@@ -26,6 +26,8 @@ COPY --from=build --chown=node:node /app/packages ./packages
 COPY --from=build --chown=node:node /app/apps/server/package.json ./apps/server/package.json
 COPY --from=build --chown=node:node /app/apps/server/dist ./apps/server/dist
 COPY --from=build --chown=node:node /app/apps/web/dist ./apps/web/dist
+# Explicit fixtures used by CI and optional verification; not executed on startup.
+COPY --from=build --chown=node:node /app/scripts/plugin-fixtures.mjs ./scripts/plugin-fixtures.mjs
 
 RUN mkdir /data && chown node:node /data
 USER node

@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { PluginRegistry } from '@approval-mcp/plugin-sdk';
@@ -12,6 +12,7 @@ import { registerSystemRoutes } from '../admin/system-routes.js';
 import { buildServerApp } from '../app.js';
 import { InMemoryRecoveryRepository, RecoveryService } from '../recovery-service.js';
 import { InMemorySessionRepository, SessionService } from '../session-store.js';
+import type { JsonValue } from '@approval-mcp/contracts';
 
 const directories: string[] = [];
 afterEach(async () => { await Promise.all(directories.splice(0).map((directory) => rm(directory, { recursive: true, force: true }))); });
@@ -35,6 +36,7 @@ async function fixture() {
   addRelease(revision, '1.0.0');
   const fetcher = vi.fn(async (url: string | URL | Request) => {
     const path = String(url);
+    if (path === 'https://api.github.com/repos/test/plugin-sample') return Response.json({ default_branch: 'main' });
     if (path.endsWith('/git/ref/heads/main')) return Response.json({ object: { sha: currentRevision } });
     const target = [...releases].find(([revision]) => path.includes(`/${revision}/`))?.[1];
     if (target === undefined) return new Response('', { status: 404 });
@@ -42,23 +44,80 @@ async function fixture() {
   });
   const create = () => new PluginManager({
     directory: join(directory, 'plugins'), state, registry, host: {} as PluginHost,
-    catalog: [{ id: 'sample', name: 'Sample', repository: 'test/plugin-sample', revision }], fetch: fetcher,
+    fetch: fetcher,
   });
   const manager = create();
   await manager.restore();
+  const install = async () => {
+    const preview = await manager.preview('https://github.com/test/plugin-sample', 'test-owner');
+    await manager.add(preview.previewId, 'test-owner');
+  };
   return { directory, state, registry, revision, fetcher, manager, create, addRelease,
-    setHead: (revision: string) => { currentRevision = revision; }, releases };
+    setHead: (revision: string) => { currentRevision = revision; }, releases, install };
 }
 
 describe('persistent plugin manager', () => {
+  it('previews metadata only, binds confirmation to its session, and installs the exact reviewed commit', async () => {
+    const { manager, fetcher, registry, addRelease, setHead } = await fixture();
+    const preview = await manager.preview('https://github.com/test/plugin-sample', 'owner');
+    expect(fetcher).toHaveBeenCalledTimes(3);
+    expect(fetcher.mock.calls.some(([url]) => String(url).endsWith('dist/plugin.mjs'))).toBe(false);
+    expect(registry.list()).toEqual([]);
+    await expect(manager.add(preview.previewId, 'different-owner')).rejects.toMatchObject({ code: 'plugin.preview_expired' });
+    const newer = 'f'.repeat(40);
+    addRelease(newer, '9.0.0');
+    setHead(newer);
+    await manager.add(preview.previewId, 'owner');
+    expect(registry.list()[0]?.version).toBe('1.0.0');
+    await expect(manager.add(preview.previewId, 'owner')).rejects.toMatchObject({ code: 'plugin.preview_expired' });
+  });
+
+  it('rejects expired previews without executing code', async () => {
+    const { manager, registry } = await fixture();
+    const preview = await manager.preview('https://github.com/test/plugin-sample', 'owner');
+    const clock = vi.spyOn(Date, 'now').mockReturnValue(new Date(preview.expiresAt).getTime() + 1);
+    try { await expect(manager.add(preview.previewId, 'owner')).rejects.toMatchObject({ code: 'plugin.preview_expired' }); }
+    finally { clock.mockRestore(); }
+    expect(registry.list()).toEqual([]);
+  });
+
+  it('does not let a second repository claim an already installed plugin ID', async () => {
+    const { manager, fetcher, install, registry } = await fixture();
+    await install();
+    const original = fetcher.getMockImplementation()!;
+    fetcher.mockImplementation(async (url) => String(url) === 'https://api.github.com/repos/evil/plugin-sample'
+      ? Response.json({ default_branch: 'main' }) : original(url));
+    await expect(manager.preview('https://github.com/evil/plugin-sample', 'owner')).rejects.toMatchObject({ code: 'plugin.source_conflict' });
+    expect(manager.list()[0]?.repository).toBe('https://github.com/test/plugin-sample');
+    expect(registry.list()).toHaveLength(1);
+  });
+
+  it('migrates installed legacy plugins offline, preserving pins and deleting empty old catalog entries', async () => {
+    const { directory, state, registry, create, fetcher, revision, releases } = await fixture();
+    const original = releases.get(revision)!;
+    const code = original.code.replace("id:'sample'", "id:'email'");
+    const installation = { ...original.manifest, id: 'email', sha256: createHash('sha256').update(code).digest('hex'), revision, installedAt: new Date().toISOString() };
+    await mkdir(join(directory, 'plugins', 'email', revision), { recursive: true });
+    await writeFile(join(directory, 'plugins', 'email', revision, 'plugin.mjs'), code);
+    await state.mutate({ type: 'record.upserted', collection: 'plugins', id: 'email', value: { enabled: true, autoInstall: true, installations: [installation] } as JsonValue });
+    await state.mutate({ type: 'record.upserted', collection: 'plugins', id: 'geo', value: { enabled: true, autoInstall: true, installations: [] } });
+    await state.mutate({ type: 'record.upserted', collection: 'upstreams', id: 'mail', value: { id: 'mail', alias: 'work', pluginId: 'email', pluginVersion: '1.0.0' } });
+    const restarted = create();
+    await restarted.restore();
+    expect(fetcher).not.toHaveBeenCalled();
+    expect(registry.list()).toEqual([{ id: 'email', version: '1.0.0', normalizationVersion: 2 }]);
+    expect(restarted.list()).toHaveLength(1);
+    expect(restarted.list()[0]?.repository).toBe('https://github.com/jiridudekusy/approval-mcp-plugin-your-mail-mcp');
+    expect(state.read((state) => state.upstreams.mail)).toMatchObject({ pluginVersion: '1.0.0' });
+  });
   it('verifies disabled cached plugins without running their factory on restart', async () => {
-    const { manager, create, addRelease, revision, registry } = await fixture();
+    const { manager, create, addRelease, revision, registry, install } = await fixture();
     addRelease(revision, '1.0.0', `export function createPlugin() {
       globalThis.__approvalPluginFactoryCalls = (globalThis.__approvalPluginFactoryCalls ?? 0) + 1;
       return {id:'sample',version:'1.0.0',normalizationVersion:2,async describe() { return {}; }};
     }`);
     try {
-      await manager.install('sample');
+      await install();
       expect(Reflect.get(globalThis, '__approvalPluginFactoryCalls')).toBe(1);
       await manager.setEnabled('sample', false);
       const restarted = create();
@@ -72,16 +131,16 @@ describe('persistent plugin manager', () => {
     } finally { Reflect.deleteProperty(globalThis, '__approvalPluginFactoryCalls'); }
   });
   it('installs once, hot loads, and restarts entirely from the persistent cache', async () => {
-    const { manager, create, fetcher, registry } = await fixture();
+    const { manager, create, fetcher, registry, install } = await fixture();
     expect(fetcher).not.toHaveBeenCalled();
-    await manager.installDefaults();
-    expect(fetcher).toHaveBeenCalledTimes(2);
+    expect(manager.list()).toEqual([]);
+    await install();
+    expect(fetcher).toHaveBeenCalledTimes(4);
     expect(registry.list()).toEqual([{ id: 'sample', version: '1.0.0', normalizationVersion: 2 }]);
     const description = await registry.describe({ id: 'sample', version: '1.0.0' }, { upstreamId: 'u', upstreamAlias: 'test', toolName: 'test', arguments: {} });
     expect(description.source).toBe('plugin');
     fetcher.mockClear();
     await create().restore();
-    await create().installDefaults();
     expect(fetcher).not.toHaveBeenCalled();
     await manager.setEnabled('sample', false);
     expect(registry.list()).toEqual([]);
@@ -93,8 +152,8 @@ describe('persistent plugin manager', () => {
   });
 
   it('adds new versions alongside existing pins, without rewriting upstreams', async () => {
-    const { manager, registry, state, addRelease, setHead, create } = await fixture();
-    await manager.install('sample');
+    const { manager, registry, state, addRelease, setHead, create, install } = await fixture();
+    await install();
     await state.mutate({ type: 'record.upserted', collection: 'upstreams', id: 'u', value: { id: 'u', alias: 'sample', pluginId: 'sample', pluginVersion: '1.0.0' } });
     const revision = 'b'.repeat(40);
     addRelease(revision, '1.1.0');
@@ -112,14 +171,13 @@ describe('persistent plugin manager', () => {
     await manager.remove('sample');
     const restarted = create();
     await restarted.restore();
-    await restarted.installDefaults();
     expect(registry.list()).toEqual([]);
-    expect(restarted.list()[0]?.installed).toEqual([]);
+    expect(restarted.list()).toEqual([]);
   });
 
   it('rejects tampered cache before execution and can repair it explicitly', async () => {
-    const { manager, directory, revision, create, registry, fetcher } = await fixture();
-    await manager.install('sample');
+    const { manager, directory, revision, create, registry, fetcher, install } = await fixture();
+    await install();
     const path = join(directory, 'plugins', 'sample', revision, 'plugin.mjs');
     const original = await readFile(path, 'utf8');
     await writeFile(path, "throw new Error('MUST NOT EXECUTE');");
@@ -135,16 +193,16 @@ describe('persistent plugin manager', () => {
   });
 
   it('does not install code with a bad hash or accept reuse of an installed version', async () => {
-    const { manager, fetcher, addRelease, setHead, registry, releases, revision } = await fixture();
+    const { manager, fetcher, addRelease, setHead, registry, releases, revision, install } = await fixture();
     fetcher.mockImplementationOnce(async () => Response.json({ apiVersion: 99 }));
-    await expect(manager.install('sample')).rejects.toThrow();
+    await expect(install()).rejects.toThrow();
     expect(registry.list()).toEqual([]);
     const originalCode = releases.get(revision)!.code;
     releases.get(revision)!.code = 'throw new Error("Must not run before integrity verification");';
-    await expect(manager.install('sample')).rejects.toMatchObject({ code: 'plugin.checksum_failed' });
+    await expect(install()).rejects.toMatchObject({ code: 'plugin.checksum_failed' });
     expect(registry.list()).toEqual([]);
     releases.get(revision)!.code = originalCode;
-    await manager.install('sample');
+    await install();
     const nextRevision = 'c'.repeat(40);
     addRelease(nextRevision, '1.0.0', 'throw new Error("changed code");');
     setHead(nextRevision);
@@ -154,15 +212,16 @@ describe('persistent plugin manager', () => {
   });
 
   it('handles download failures without stopping the server or retrying installed plugins', async () => {
-    const { manager, fetcher, registry } = await fixture();
+    const { manager, fetcher, registry, install } = await fixture();
     fetcher.mockRejectedValueOnce(new Error('offline'));
-    await manager.installDefaults();
-    expect(manager.list()[0]?.error).toBe('plugin.operation_failed');
+    await expect(install()).rejects.toThrow('offline');
+    expect(manager.list()).toEqual([]);
     expect(registry.list()).toEqual([]);
-    await manager.installDefaults();
+    await install();
     expect(registry.list()).toHaveLength(1);
     fetcher.mockClear();
-    await manager.installDefaults();
+    // Merely listing/restoring never checks for or installs anything.
+    manager.list();
     expect(fetcher).not.toHaveBeenCalled();
   });
 
@@ -179,8 +238,12 @@ describe('persistent plugin manager', () => {
       await registerSystemRoutes(app, { sessions, getPlugins: () => registry.list() });
       expect((await app.inject({ url: '/api/admin/plugins/catalog' })).statusCode).toBe(401);
       const headers = { cookie: `amcp_admin=${session.plaintext}`, 'x-csrf-token': session.csrfToken };
-      expect((await app.inject({ method: 'POST', url: '/api/admin/plugins/sample/install', headers: { cookie: headers.cookie } })).statusCode).toBe(403);
-      expect((await app.inject({ method: 'POST', url: '/api/admin/plugins/sample/install', headers })).statusCode).toBe(200);
+      expect((await app.inject({ method: 'POST', url: '/api/admin/plugins/preview', headers: { cookie: headers.cookie }, payload: { repository: 'https://github.com/test/plugin-sample' } })).statusCode).toBe(403);
+      const preview = await app.inject({ method: 'POST', url: '/api/admin/plugins/preview', headers, payload: { repository: 'https://github.com/test/plugin-sample' } });
+      expect(preview.statusCode).toBe(200);
+      expect(registry.list()).toEqual([]);
+      expect((await app.inject({ method: 'POST', url: '/api/admin/plugins/sources', headers, payload: { previewId: preview.json().previewId, trustCode: false } })).statusCode).toBe(400);
+      expect((await app.inject({ method: 'POST', url: '/api/admin/plugins/sources', headers, payload: { previewId: preview.json().previewId, trustCode: true } })).statusCode).toBe(201);
       expect((await app.inject({ url: '/api/admin/plugins', headers })).json()).toHaveLength(1);
       expect((await app.inject({ method: 'POST', url: '/api/admin/plugins/sample/disable', headers })).statusCode).toBe(200);
       expect((await app.inject({ url: '/api/admin/plugins', headers })).json()).toEqual([]);
