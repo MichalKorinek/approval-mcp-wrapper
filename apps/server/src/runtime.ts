@@ -93,6 +93,7 @@ const oauth = new OAuthService(
   () => new Date(),
   config.oauthOrigins,
   (event) => console.info(JSON.stringify(event)),
+  codec,
 );
 const credentialVault = new CredentialVault(config.masterKey);
 const pushNotifications = await PushNotificationService.create({

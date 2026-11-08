@@ -1,11 +1,13 @@
 import { createHash, randomBytes, randomUUID, timingSafeEqual } from 'node:crypto';
 
-import type { ClientTokenId, ClientTokenRecord, JsonValue, Profile, ProfileId, TokenProfileAssignment } from '@approval-mcp/contracts';
-import type { ConfigStateStore, StateOperation } from '@approval-mcp/state-store';
+import type { ClientTokenId, ClientTokenRecord, JsonValue, Profile, ProfileId, TokenProfileAssignment, StorageCodec } from '@approval-mcp/contracts';
+import { StorageCipher, type ConfigStateStore, type StateOperation } from '@approval-mcp/state-store';
+import { z } from 'zod';
 
 const REQUEST_LIFETIME_MS = 10 * 60_000;
 const CODE_LIFETIME_MS = 5 * 60_000;
 const ACCESS_LIFETIME_MS = 15 * 60_000;
+export const REFRESH_REUSE_GRACE_MS = 30 * 60_000;
 const MAX_GRANT_LIFETIME_SECONDS = 30 * 24 * 60 * 60;
 
 interface OAuthClient {
@@ -52,6 +54,12 @@ interface OAuthGrant {
   approvedByAdminId: string;
   expiresAt: string;
   revokedAt?: string;
+  refreshGeneration?: number;
+  refreshResponse?: {
+    sealed: string;
+    accessExpiresAt: string;
+    refreshTokenHash?: string;
+  };
 }
 
 interface OAuthToken {
@@ -59,7 +67,18 @@ interface OAuthToken {
   kind: 'access' | 'refresh';
   expiresAt: string;
   usedAt?: string;
+  generation?: number;
 }
+
+interface OAuthTokenResponse {
+  access_token: string; token_type: 'Bearer'; expires_in: number;
+  refresh_token?: string; scope: string;
+}
+const responseSchema = z.object({
+  access_token: z.string().regex(/^amcpoa_[A-Za-z0-9_-]{43}$/),
+  token_type: z.literal('Bearer'), expires_in: z.number().int().positive(),
+  refresh_token: z.string().regex(/^amcpor_[A-Za-z0-9_-]{43}$/).optional(), scope: z.literal('mcp:access'),
+}).strict();
 
 export class OAuthError extends Error {
   constructor(readonly code: string, readonly status = 400) {
@@ -70,11 +89,15 @@ export class OAuthError extends Error {
 export interface OAuthRefreshDiagnostic {
   event: 'oauth.refresh';
   timestamp: string;
-  outcome: 'issued' | 'rejected';
-  reason?: 'grant_expired' | 'grant_inactive' | 'binding_mismatch' | 'token_expired' | 'replay_detected';
+  outcome: 'issued' | 'reused' | 'rejected';
+  reason?: 'grant_expired' | 'grant_inactive' | 'binding_mismatch' | 'token_expired' | 'replay_detected' | 'reuse_within_grace';
   grantId?: string;
   agentId?: string;
   grantExpiresAt?: string;
+  usedAgoMs?: number;
+  tokenGeneration?: number;
+  currentGeneration?: number;
+  isLatestParent?: boolean;
 }
 
 function hash(value: string): string {
@@ -116,6 +139,7 @@ export class OAuthService {
   readonly #now: () => Date;
   readonly #originByHost: ReadonlyMap<string, string>;
   readonly #onRefreshDiagnostic: ((event: OAuthRefreshDiagnostic) => void) | undefined;
+  readonly #refreshResponseCodec: StorageCodec;
   #queue: Promise<void> = Promise.resolve();
 
   constructor(
@@ -124,12 +148,14 @@ export class OAuthService {
     now: () => Date = () => new Date(),
     origins: readonly string[] = [publicOrigin],
     onRefreshDiagnostic?: (event: OAuthRefreshDiagnostic) => void,
+    refreshResponseCodec: StorageCodec = new StorageCipher(randomBytes(32), 'oauth-refresh-response-cache'),
   ) {
     this.#state = state;
     this.issuer = publicOrigin;
     this.resource = `${publicOrigin}/mcp`;
     this.#now = now;
     this.#onRefreshDiagnostic = onRefreshDiagnostic;
+    this.#refreshResponseCodec = refreshResponseCodec;
     this.#originByHost = new Map(origins.map((origin) => [new URL(origin).host.toLowerCase(), origin]));
     if (!this.#originByHost.has(new URL(publicOrigin).host.toLowerCase())) {
       throw new Error('The passkey origin must be an allowed OAuth origin');
@@ -308,32 +334,75 @@ export class OAuthService {
     });
   }
 
-  async #issue(grant: OAuthGrant, extraOperations: StateOperation[]): Promise<{
-    access_token: string; token_type: 'Bearer'; expires_in: number; refresh_token?: string; scope: string;
-  }> {
-    const remainingMs = new Date(grant.expiresAt).getTime() - this.#now().getTime();
+  async #issue(grant: OAuthGrant, extraOperations: StateOperation[]): Promise<OAuthTokenResponse> {
+    const now = this.#now();
+    const remainingMs = new Date(grant.expiresAt).getTime() - now.getTime();
     if (remainingMs <= 0) throw new OAuthError('invalid_grant');
     const accessToken = `amcpoa_${randomBytes(32).toString('base64url')}`;
     const accessLifetimeMs = Math.min(ACCESS_LIFETIME_MS, remainingMs);
+    const generation = (grant.refreshGeneration ?? 0) + 1;
     const access: OAuthToken = {
       grantId: grant.id, kind: 'access',
-      expiresAt: new Date(this.#now().getTime() + accessLifetimeMs).toISOString(),
+      expiresAt: new Date(now.getTime() + accessLifetimeMs).toISOString(), generation,
     };
-    const operations = [...extraOperations, upsert('oauthTokens', hash(accessToken), access)];
+    // Keep a single refresh lineage, including when an ancestor retries after
+    // the cached access token expired or an older server has no response cache.
+    const candidates = this.#state.read((state) => grant.refreshResponse?.refreshTokenHash !== undefined
+      ? [[grant.refreshResponse.refreshTokenHash, state.oauthTokens[grant.refreshResponse.refreshTokenHash]]] as const
+      : Object.entries(state.oauthTokens));
+    const retired: StateOperation[] = [];
+    for (const [id, value] of candidates) {
+      const token = record<OAuthToken>(value);
+      if (token?.grantId === grant.id && token.kind === 'refresh' && token.usedAt === undefined) {
+        retired.push(upsert('oauthTokens', id, { ...token, usedAt: now.toISOString() }));
+      }
+    }
+    const operations = [...retired, ...extraOperations, upsert('oauthTokens', hash(accessToken), access)];
     let refreshToken: string | undefined;
     if (remainingMs > ACCESS_LIFETIME_MS) {
       refreshToken = `amcpor_${randomBytes(32).toString('base64url')}`;
       operations.push(upsert('oauthTokens', hash(refreshToken), {
-        grantId: grant.id, kind: 'refresh', expiresAt: grant.expiresAt,
+        grantId: grant.id, kind: 'refresh', expiresAt: grant.expiresAt, generation,
       } satisfies OAuthToken));
     }
-    await this.#state.mutate({ type: 'records.batch', operations });
-    return {
+    const response: OAuthTokenResponse = {
       access_token: accessToken, token_type: 'Bearer',
       expires_in: Math.max(1, Math.floor(accessLifetimeMs / 1000)),
       ...(refreshToken === undefined ? {} : { refresh_token: refreshToken }),
       scope: 'mcp:access',
     };
+    operations.push(upsert('oauthGrants', grant.id, {
+      ...grant, refreshGeneration: generation,
+      refreshResponse: {
+        sealed: this.#refreshResponseCodec.encode(`oauth-refresh-response/${grant.id}`, JSON.stringify(response)),
+        accessExpiresAt: access.expiresAt,
+        ...(refreshToken === undefined ? {} : { refreshTokenHash: hash(refreshToken) }),
+      },
+    } satisfies OAuthGrant));
+    await this.#state.mutate({ type: 'records.batch', operations });
+    return response;
+  }
+
+  #cachedResponse(grant: OAuthGrant): OAuthTokenResponse | undefined {
+    const cache = grant.refreshResponse;
+    if (cache === undefined) return undefined;
+    const remainingMs = Date.parse(cache.accessExpiresAt) - this.#now().getTime();
+    if (!Number.isFinite(remainingMs)) throw new OAuthError('server_error', 500);
+    if (remainingMs < 1000) return undefined;
+    const response = responseSchema.parse(JSON.parse(this.#refreshResponseCodec.decode(
+      `oauth-refresh-response/${grant.id}`, cache.sealed,
+    ))) as OAuthTokenResponse;
+    const valid = this.#state.read((state) => {
+      const access = record<OAuthToken>(state.oauthTokens[hash(response.access_token)]);
+      if (access?.grantId !== grant.id || access.kind !== 'access' || access.expiresAt !== cache.accessExpiresAt) return false;
+      if (response.refresh_token === undefined) return cache.refreshTokenHash === undefined;
+      if (hash(response.refresh_token) !== cache.refreshTokenHash) return false;
+      const refresh = record<OAuthToken>(state.oauthTokens[cache.refreshTokenHash]);
+      return refresh?.grantId === grant.id && refresh.kind === 'refresh' && refresh.usedAt === undefined && refresh.expiresAt > this.#now().toISOString();
+    });
+    if (!valid) throw new OAuthError('server_error', 500);
+    // The response is shared, not renewed: never extend the stored access lifetime.
+    return { ...response, expires_in: Math.floor(remainingMs / 1000) };
   }
 
   async exchangeCode(input: { code: string; clientId: string; redirectUri: string; resource: string; codeVerifier: string; issuer?: string }) {
@@ -384,12 +453,30 @@ export class OAuthService {
         throw new OAuthError('invalid_grant');
       }
       if (token.usedAt !== undefined) {
+        const usedAgoMs = this.#now().getTime() - Date.parse(token.usedAt);
+        const generation = {
+          ...(token.generation === undefined ? {} : { tokenGeneration: token.generation }),
+          ...(grant.refreshGeneration === undefined ? {} : { currentGeneration: grant.refreshGeneration }),
+          ...(token.generation === undefined || grant.refreshGeneration === undefined ? {} : { isLatestParent: token.generation === grant.refreshGeneration - 1 }),
+          ...(Number.isFinite(usedAgoMs) ? { usedAgoMs } : {}),
+        };
+        // Fixed from FIRST use. Retries must never slide this window forward.
+        // Any recent ancestor can converge on the latest pair (not just its parent).
+        if (usedAgoMs >= 0 && usedAgoMs < REFRESH_REUSE_GRACE_MS) {
+          const cached = this.#cachedResponse(grant);
+          const response = cached ?? await this.#issue(grant, []);
+          this.#reportRefresh({ outcome: cached === undefined ? 'issued' : 'reused', reason: 'reuse_within_grace',
+            ...identity, ...generation,
+            currentGeneration: cached === undefined ? (grant.refreshGeneration ?? 0) + 1 : grant.refreshGeneration!,
+            grantExpiresAt: grant.expiresAt });
+          return response;
+        }
         await this.#state.mutate(upsert('oauthGrants', grant.id, { ...grant, revokedAt: this.#now().toISOString() }));
-        this.#reportRefresh({ outcome: 'rejected', reason: 'replay_detected', ...identity });
+        this.#reportRefresh({ outcome: 'rejected', reason: 'replay_detected', ...identity, ...generation });
         throw new OAuthError('invalid_grant');
       }
       const issued = await this.#issue(grant, [upsert('oauthTokens', key, { ...token, usedAt: this.#now().toISOString() })]);
-      this.#reportRefresh({ outcome: 'issued', ...identity, grantExpiresAt: grant.expiresAt });
+      this.#reportRefresh({ outcome: 'issued', ...identity, currentGeneration: (grant.refreshGeneration ?? 0) + 1, grantExpiresAt: grant.expiresAt });
       return issued;
     });
   }

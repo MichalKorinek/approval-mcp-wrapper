@@ -39,11 +39,42 @@ The server writes one structured `oauth.refresh` line to container logs for
 each refresh attempt with a recognized token. Unknown tokens are not logged to
 avoid log flooding. Each line records the outcome, a reason for rejection, the
 grant and agent IDs when known, and the grant expiry after a successful refresh.
-It never logs access or refresh token values. A successful refresh followed by
-`replay_detected` for the same grant indicates that an already-used refresh
-token was submitted again; `grant_expired` means the approved access lifetime
-ended. The replay protection remains active and requires a new authorization
-after a detected replay.
+It never logs access or refresh token values. `grant_expired` means the
+approved access lifetime ended.
+
+Refresh rotation has a **30-minute reuse tolerance**, measured from a token's
+**first** successful use. Retries do not slide that deadline forward. A repeated
+request within that window, including a recent ancestor of the latest token,
+receives the latest valid token pair rather than revoking the grant or creating
+an independent token branch. This handles concurrent client processes and a
+lost refresh response. The returned `expires_in` is recomputed from the actual
+stored access expiry; the access token lifetime remains 15 minutes and consent
+expiry is never extended. If the cached access token expired, one new canonical
+pair is issued and the previous active refresh token is marked used.
+
+The current response is cached **encrypted**, bound to its grant. Production
+uses the persistent storage codec, so an unlocked server can recover that
+response after restart. Raw access/refresh token strings are not stored in the
+state. Older grants without cache/generation metadata are upgraded lazily on
+refresh; no new login is needed for still-active grants. Previously revoked
+grants remain revoked and require a new authorization.
+
+Diagnostics report `outcome: reused` and `reason: reuse_within_grace` for a
+cached response, or `outcome: issued` with the same reason when it had to be
+renewed. Safe metadata includes `usedAgoMs`, `tokenGeneration`,
+`currentGeneration` and `isLatestParent` when available; unknown legacy
+generations are omitted. A used token presented **at or beyond 30 minutes**
+still causes `replay_detected`, grant revocation and a new authorization.
+Client/issuer/resource binding, grant expiry, profile changes, administrator
+revocation and agent deletion are checked before any tolerance is applied.
+
+This window is an explicit usability/security trade-off: a stolen used token
+can obtain the current credentials within that window too. It is not a period
+specified by [RFC 9700](https://www.rfc-editor.org/rfc/rfc9700.html#section-4.14.2).
+Do not treat a tolerated retry as proof of the client's identity beyond its
+existing token/binding checks. A process holding a consumed token for longer
+than 30 minutes still needs coordinated credential refresh or a separate
+authorization; the tolerance does not solve indefinitely stale client caches.
 
 The callback must be reachable by the browser that completes the sign-in.
 `http://localhost` and other loopback callback URLs refer to that browser's

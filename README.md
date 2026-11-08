@@ -43,6 +43,9 @@ sent. [Demo script and recording instructions](docs/demo.md).
 - **OAuth and passkeys:** the client opens an authorization page where you
   choose an agent name, profile, and access lifetime, then confirm with your
   passkey. Manually created agent tokens are also supported.
+  Refresh-token rotation tolerates reuse for 30 minutes from first use, so
+  concurrent client processes can converge without revoking each other's access.
+  [Behavior and security trade-off](docs/operations/mcp-compatibility.md).
 - **Web Push:** notifications link to the approval detail. Manage registered
   devices, send individual tests, and remove devices from the web app.
 - **History:** call timelines, decisions, denial reasons, and JSONL/CSV export.

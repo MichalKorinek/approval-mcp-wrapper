@@ -93,6 +93,17 @@ it.each([
   const accessToken = token.json<{ access_token: string }>().access_token;
   expect(oauth.authenticate(accessToken, clientOrigin)).toBeDefined();
   expect(oauth.authenticate(accessToken, clientOrigin === origin ? 'http://192.168.64.1:43127' : origin)).toBeUndefined();
+  const refreshBody = new URLSearchParams({ grant_type: 'refresh_token', refresh_token: token.json<{ refresh_token: string }>().refresh_token,
+    client_id: clientId, resource }).toString();
+  const concurrent = await Promise.all(Array.from({ length: 3 }, () => app.inject({
+    method: 'POST', url: '/oauth/token', headers: { host: clientHost, 'content-type': 'application/x-www-form-urlencoded' }, payload: refreshBody,
+  })));
+  expect(concurrent.map((response) => response.statusCode)).toEqual([200, 200, 200]);
+  expect(new Set(concurrent.map((response) => response.json<{ refresh_token: string }>().refresh_token)).size).toBe(1);
+  const renewedAccess = concurrent[0]!.json<{ access_token: string }>().access_token;
+  expect(oauth.authenticate(renewedAccess, clientOrigin)).toBeDefined();
+  expect(concurrent[0]!.headers['cache-control']).toBe('no-store');
+  expect(concurrent[0]!.headers.pragma).toBe('no-cache');
   const foreignMetadata = await app.inject({ method: 'GET', url: '/.well-known/oauth-authorization-server', headers: { host: 'evil.example.test' } });
   expect(foreignMetadata.statusCode).toBe(421);
   await app.close();
