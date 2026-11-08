@@ -11,7 +11,7 @@ import { StateStoreTokenRepository, TokenService } from '@approval-mcp/gateway';
 import { buildServerApp } from '../apps/server/dist/app.js';
 import { registerAdminRoutes } from '../apps/server/dist/admin/index.js';
 import { PluginManager } from '../apps/server/dist/plugins/plugin-manager.js';
-import { addSamplePlugins } from './plugin-fixtures.mjs';
+import { addSamplePlugins, createFixtureFetch } from './plugin-fixtures.mjs';
 import { InMemoryRecoveryRepository, RecoveryService } from '../apps/server/dist/recovery-service.js';
 import { InMemorySessionRepository, SessionService } from '../apps/server/dist/session-store.js';
 
@@ -24,7 +24,7 @@ const host = {
   async findContact(_upstream, _source, identifier) { return { contacts: [{ jid: identifier, name: 'Sample contact' }] }; },
   async findChat(_upstream, identifier) { return { jid: identifier, name: 'Sample chat' }; },
 };
-const manager = new PluginManager({ directory: join(directory, 'plugins'), state, registry, host });
+const manager = new PluginManager({ directory: join(directory, 'plugins'), state, registry, host, fetch: createFixtureFetch() });
 let browser;
 let app;
 try {
