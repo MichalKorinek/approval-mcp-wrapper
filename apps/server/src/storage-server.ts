@@ -26,6 +26,7 @@ export async function buildStorageServer(config: ServerConfig, options: {
   createRuntime?: typeof buildRuntime;
   notifyLocked?: typeof sendUnlockPush;
   setupToken?: string;
+  webRoot?: string;
 } = {}): Promise<FastifyInstance> {
   const vault = await StorageVault.open(config.dataDir, config.expectedOrigin);
   if (!config.unlockNotifications) await rm(join(config.dataDir, 'storage-unlock-push.json'), { force: true });
@@ -207,7 +208,7 @@ export async function buildStorageServer(config: ServerConfig, options: {
     const result = await runtime.app.inject({ method: 'GET', url: '/health/ready' });
     return reply.code(result.statusCode).send(result.json());
   });
-  await app.register(fastifyStatic, { root: join(process.cwd(), 'apps/web/dist'), wildcard: false });
+  await app.register(fastifyStatic, { root: options.webRoot ?? join(process.cwd(), 'apps/web/dist'), wildcard: false });
   app.setNotFoundHandler((request, reply) => {
     if (request.url.startsWith('/api/')) return reply.code(423).send({ error: { code: 'storage.locked' } });
     if (request.url.startsWith('/mcp') || request.url.startsWith('/.well-known/') || request.method !== 'GET') return reply.code(503).header('retry-after', '30').send({ error: 'storage_locked', unlock_url: config.expectedOrigin + '/unlock' });

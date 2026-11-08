@@ -2,6 +2,7 @@ import { mkdtemp, readFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { randomBytes, randomUUID } from 'node:crypto';
+import { fileURLToPath } from 'node:url';
 import { describe, it, expect } from 'vitest';
 import { createConfigStateStore } from '@approval-mcp/state-store';
 import { loadConfig } from './config.js';
@@ -11,6 +12,7 @@ import { StorageVault } from './storage-vault.js';
 const directory = () => mkdtemp(join(tmpdir(), 'approval-storage-http-'));
 const configFor = (dataDir: string, key?: Buffer) => loadConfig({ APPROVAL_MCP_PUBLIC_URL: 'http://localhost:43127', APPROVAL_MCP_DATA_DIR: dataDir, ...(key === undefined ? {} : { APPROVAL_MCP_MASTER_KEY: key.toString('base64') }) });
 const headers = { host: 'localhost:43127' };
+const webRoot = fileURLToPath(new URL('./fixtures/storage-web', import.meta.url));
 
 describe('storage startup boundary', () => {
   it('uses the existing environment key, migrates data and dispatches normal auth routes', async () => {
@@ -37,7 +39,7 @@ describe('storage startup boundary', () => {
     const wrap = { nonce: randomBytes(12).toString('base64url'), ciphertext: randomBytes(48).toString('base64url') };
     await vault.initialize(key, { id: randomUUID(), name: 'Mac', salt: randomBytes(32).toString('base64url'), credential: { id: 'fixture', publicKey: 'fixture', counter: 0 }, wrap, createdAt: new Date().toISOString() }, wrap);
     await vault.unlock(key); vault.destroy();
-    const app = await buildStorageServer(configFor(dir));
+    const app = await buildStorageServer(configFor(dir), { webRoot });
     try {
       const statusResponse = await app.inject({ url: '/api/storage/status', headers });
       const status = statusResponse.json();
@@ -47,7 +49,10 @@ describe('storage startup boundary', () => {
       expect((await app.inject({ url: '/health/ready', headers })).statusCode).toBe(503);
       expect((await app.inject({ url: '/mcp', headers })).statusCode).toBe(503);
       expect((await app.inject({ url: '/api/auth/session', headers })).statusCode).toBe(423);
-      expect((await app.inject({ url: '/', headers })).headers['content-type']).toContain('text/html');
+      const page = await app.inject({ url: '/', headers });
+      expect(page.statusCode).toBe(200);
+      expect(page.headers['content-type']).toContain('text/html');
+      expect(page.body).toContain('Storage UI fixture');
       expect((await post('recover', { key: randomBytes(32).toString('base64url') })).statusCode).toBe(400);
       expect((await app.inject({ method: 'POST', url: '/api/storage/recover', headers, payload: { key: key.toString('base64url') } })).statusCode).toBe(403);
       expect((await post('enroll/options', { name: 'attacker' })).statusCode).toBe(400);
