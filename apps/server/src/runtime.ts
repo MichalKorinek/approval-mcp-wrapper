@@ -9,6 +9,8 @@ import { PasskeyService } from './passkey-service.js';
 import { RecoveryService } from './recovery-service.js';
 import { SessionService } from './session-store.js';
 import { OAuthService } from './oauth-service.js';
+import { registerSetupRoutes } from './setup/setup-routes.js';
+import { SetupService } from './setup/setup-service.js';
 import { createConfigStateStore, createNodeFileOperations } from '@approval-mcp/state-store';
 import type { StorageCodec } from '@approval-mcp/contracts';
 import { createCallJournal } from '@approval-mcp/call-journal';
@@ -521,6 +523,16 @@ const catalogRefreshTimer = setInterval(() => {
   ).finally(() => { catalogRefreshRunning = false; });
 }, 30_000);
 catalogRefreshTimer.unref();
+const passkeys = new PasskeyService({
+  rpName: 'Approval MCP Wrapper',
+  rpId: config.rpId,
+  expectedOrigin: config.expectedOrigin,
+  repository: new StatePasskeyRepository(stateStore),
+});
+const upstreamsChanged = async () => {
+  await upstreams.replaceUpstreams(configuredUpstreams());
+  mcpHandler.notifyToolsChanged();
+};
 const app = await buildServerApp({
   oauth,
   readiness: () =>
@@ -529,12 +541,7 @@ const app = await buildServerApp({
       masterKeyLoaded: true,
     }),
   auth: {
-    passkeys: new PasskeyService({
-      rpName: 'Approval MCP Wrapper',
-      rpId: config.rpId,
-      expectedOrigin: config.expectedOrigin,
-      repository: new StatePasskeyRepository(stateStore),
-    }),
+    passkeys,
     sessions,
     recovery: new RecoveryService(new StateRecoveryRepository(stateStore)),
     secureCookies: config.secureCookies,
@@ -556,13 +563,17 @@ await registerAdminRoutes(app, {
   getPlugins: () => pluginRegistry.list(),
   pluginManager,
   push: pushNotifications,
-  onUpstreamsChanged: async () => {
-    await upstreams.replaceUpstreams(configuredUpstreams());
-    mcpHandler.notifyToolsChanged();
-  },
+  onUpstreamsChanged: upstreamsChanged,
   onVisibilityChanged: () => mcpHandler.notifyToolsChanged(),
   discoverTools: (upstreamId) => upstreams.refresh(upstreamId),
 });
+const setup = new SetupService({
+  state: stateStore,
+  credentialVault,
+  publicOrigin: config.expectedOrigin,
+  onUpstreamsChanged: upstreamsChanged,
+});
+await registerSetupRoutes(app, { setup, passkeys, sessions });
 app.route({
   method: ['GET', 'POST', 'DELETE'],
   url: '/mcp',

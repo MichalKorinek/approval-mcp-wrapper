@@ -32,6 +32,12 @@ describe('application routes', () => {
     expect(routePath(route)).toBe('/oauth/consent/request-1');
   });
 
+  it('parses and builds the setup approval route', () => {
+    const route = routeFromLocation({ pathname: '/setup/requests/request-1', search: '' });
+    expect(route).toEqual({ page: 'setup', setupRequestId: 'request-1' });
+    expect(routePath(route)).toBe('/setup/requests/request-1');
+  });
+
   it('keeps legacy notification links compatible', () => {
     expect(routeFromLocation({ pathname: '/', search: '?approval=approval-1' }))
       .toEqual({ page: 'inbox', approvalId: 'approval-1' });

@@ -42,6 +42,8 @@ export interface Upstream extends VersionedRecord {
   pluginId?: string;
   pluginVersion?: string;
   allowPrivateNetwork: boolean;
+  /** Source name of the declarative setup request that last created or changed this upstream. */
+  managedBy?: string;
 }
 
 export interface ClientTokenRecord extends VersionedRecord {

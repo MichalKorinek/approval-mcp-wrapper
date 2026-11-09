@@ -10,6 +10,7 @@ import { useI18n } from './i18n/i18n.js';
 import { Inbox } from './pages/inbox.js';
 import { Login } from './pages/login.js';
 import { OAuthConsent } from './pages/oauth-consent.js';
+import { SetupApproval } from './pages/setup-approval.js';
 import { Upstreams } from './pages/upstreams.js';
 import { Access } from './pages/access.js';
 import { System } from './pages/system.js';
@@ -144,6 +145,9 @@ export function App() {
   const { csrfToken } = authentication;
   if (route.page === 'oauth') {
     return <OAuthConsent requestId={route.oauthRequestId} csrfToken={csrfToken} />;
+  }
+  if (route.page === 'setup') {
+    return <SetupApproval requestId={route.setupRequestId} csrfToken={csrfToken} />;
   }
   const page: Page = route.page;
   return (

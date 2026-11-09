@@ -1,0 +1,12 @@
+#!/bin/sh
+# Declarative upstream setup from inside the wrapper container. Usage on the host:
+#   docker exec -i <container> approval-mcp-setup < .approval-mcp.json
+# The declaration arrives on standard input, so the "server" field of the file does
+# not apply here. The server accepts only requests addressed to its configured
+# hosts, so the CLI calls the public URL rather than 127.0.0.1; override it with
+# docker exec -e APPROVAL_MCP_URL=... when that URL is not reachable from inside.
+set -eu
+: "${APPROVAL_MCP_URL:=${APPROVAL_MCP_PUBLIC_URL:-http://localhost:${PORT:-3000}}}"
+: "${APPROVAL_MCP_SETUP_FILE:=-}"
+export APPROVAL_MCP_URL APPROVAL_MCP_SETUP_FILE
+exec node /app/scripts/approval-mcp-setup.mjs "$@"

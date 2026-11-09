@@ -2,7 +2,8 @@ export type Page = 'access' | 'history' | 'inbox' | 'system' | 'upstreams' | 'pl
 
 export type AppRoute =
   | { page: Page; approvalId?: string }
-  | { page: 'oauth'; oauthRequestId: string };
+  | { page: 'oauth'; oauthRequestId: string }
+  | { page: 'setup'; setupRequestId: string };
 
 export const pagePaths: Record<Page, string> = {
   inbox: '/approvals',
@@ -36,6 +37,11 @@ export function routeFromLocation(
     const oauthRequestId = decodedApprovalId(oauthMatch[1]);
     if (oauthRequestId !== undefined) return { page: 'oauth', oauthRequestId };
   }
+  const setupMatch = /^\/setup\/requests\/([^/]+)$/.exec(pathname);
+  if (setupMatch?.[1] !== undefined) {
+    const setupRequestId = decodedApprovalId(setupMatch[1]);
+    if (setupRequestId !== undefined) return { page: 'setup', setupRequestId };
+  }
   const approvalMatch = /^\/approvals\/([^/]+)$/.exec(pathname);
   const approvalId = approvalMatch?.[1] === undefined
     ? undefined
@@ -60,6 +66,7 @@ export function routeFromLocation(
 }
 
 export function routePath(route: AppRoute): string {
+  if (route.page === 'setup') return `/setup/requests/${encodeURIComponent(route.setupRequestId)}`;
   if (route.page === 'oauth') return `/oauth/consent/${encodeURIComponent(route.oauthRequestId)}`;
   if (route.page === 'inbox' && route.approvalId !== undefined) {
     return `${pagePaths.inbox}/${encodeURIComponent(route.approvalId)}`;
