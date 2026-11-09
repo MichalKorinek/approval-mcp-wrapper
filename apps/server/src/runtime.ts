@@ -530,7 +530,9 @@ const passkeys = new PasskeyService({
   repository: new StatePasskeyRepository(stateStore),
 });
 const upstreamsChanged = async () => {
-  await upstreams.replaceUpstreams(configuredUpstreams());
+  // Setup and admin share this path; the registry reads the newest stored
+  // configuration inside its own queue.
+  await upstreams.syncUpstreams(configuredUpstreams);
   mcpHandler.notifyToolsChanged();
 };
 const app = await buildServerApp({
@@ -573,7 +575,15 @@ const setup = new SetupService({
   publicOrigin: config.expectedOrigin,
   onUpstreamsChanged: upstreamsChanged,
 });
-await registerSetupRoutes(app, { setup, passkeys, sessions });
+await registerSetupRoutes(app, {
+  setup,
+  passkeys,
+  sessions,
+  authenticateRequester: async (token) => {
+    const record = await tokens.authenticate(token);
+    return record === undefined ? undefined : { id: record.id, label: record.label };
+  },
+});
 app.route({
   method: ['GET', 'POST', 'DELETE'],
   url: '/mcp',

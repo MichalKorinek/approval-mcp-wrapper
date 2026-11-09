@@ -56,6 +56,7 @@ export class UpstreamRegistry extends EventEmitter {
   readonly #credentialVault: CredentialVault | undefined;
   readonly #now: () => Date;
   #generation = 0;
+  #reconfiguration: Promise<void> = Promise.resolve();
 
   constructor(options: RegistryOptions) {
     super();
@@ -68,14 +69,29 @@ export class UpstreamRegistry extends EventEmitter {
     this.#now = options.now ?? (() => new Date());
   }
 
-  async replaceUpstreams(upstreams: readonly Upstream[]): Promise<void> {
-    await this.close();
-    this.#upstreams.clear();
-    this.#catalogs.clear();
-    this.#health.clear();
-    for (const upstream of upstreams) {
-      this.#upstreams.set(upstream.id, upstream);
-    }
+  replaceUpstreams(upstreams: readonly Upstream[]): Promise<void> {
+    return this.syncUpstreams(() => upstreams);
+  }
+
+  /**
+   * Reconfigures the registry from `load`. Reconfigurations run one at a time,
+   * and `load` runs inside that queue, so the newest stored configuration always
+   * wins even when closing old connections takes a while.
+   */
+  syncUpstreams(load: () => readonly Upstream[]): Promise<void> {
+    const run = this.#reconfiguration.then(async () => {
+      // Install the new configuration before closing the old connections, so a
+      // call that reconnects meanwhile already uses the new settings.
+      this.#upstreams.clear();
+      this.#catalogs.clear();
+      this.#health.clear();
+      for (const upstream of load()) {
+        this.#upstreams.set(upstream.id, upstream);
+      }
+      await this.close();
+    });
+    this.#reconfiguration = run.catch(() => undefined);
+    return run;
   }
 
   upstreamIds(): readonly UpstreamId[] {
@@ -198,11 +214,11 @@ export class UpstreamRegistry extends EventEmitter {
 
   async close(): Promise<void> {
     this.#generation += 1;
-    await Promise.allSettled(this.#refreshes.values());
-    await Promise.all(
-      [...this.#connections.values()].map((connection) => connection.close()),
-    );
+    // Detach first, so no call picks up a connection that is being replaced.
+    const connections = [...this.#connections.values()];
     this.#connections.clear();
+    await Promise.allSettled(this.#refreshes.values());
+    await Promise.all(connections.map((connection) => connection.close()));
   }
 
   async #connectAndReturn(upstreamId: UpstreamId): Promise<McpConnection> {

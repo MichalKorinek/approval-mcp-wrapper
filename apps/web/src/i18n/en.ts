@@ -402,6 +402,7 @@ export const en = {
   'setup.description': 'A local tool asks to create or change upstream MCP servers. Nothing changes until you confirm with your passkey.',
   'setup.requestedBy': 'REQUESTED BY',
   'setup.unverified': 'The requester name is self-reported and not verified',
+  'setup.requestedWith': 'Client token',
   'setup.expiresAt': 'Request expires',
   'setup.create': 'Create',
   'setup.update': 'Update',

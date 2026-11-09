@@ -34,6 +34,15 @@ export interface ConfigStateStore {
   load(): Promise<Readonly<ConfigState>>;
   read<T>(select: (state: Readonly<ConfigState>) => T): T;
   mutate(event: StateEvent): Promise<Readonly<ConfigState>>;
+  /**
+   * Runs `decide` inside the mutation queue against the state left by every
+   * earlier queued mutation, then durably writes the returned event, if any.
+   * Nothing else can be written between the decision and the write, so checks
+   * such as record versions belong in `decide`.
+   */
+  transact<T>(
+    decide: (state: Readonly<ConfigState>) => { event?: StateEvent; result: T },
+  ): Promise<T>;
   snapshot(): Promise<void>;
   close(): Promise<void>;
 }
@@ -139,21 +148,33 @@ class FileConfigStateStore implements ConfigStateStore {
   }
 
   public mutate(event: StateEvent): Promise<Readonly<ConfigState>> {
+    return this.transact(() => ({ event, result: undefined })).then(() => this.state);
+  }
+
+  public transact<T>(
+    decide: (state: Readonly<ConfigState>) => { event?: StateEvent; result: T },
+  ): Promise<T> {
     const operation = this.mutationQueue.then(async () => {
-      const parsedEvent = stateEventSchema.parse(event) as StateEvent;
-      const nextState = reduceState(this.state, parsedEvent);
-      const sequence = this.sequence + 1;
-      const recordWithoutChecksum = { sequence, event: parsedEvent };
-      const record: JournalRecord = {
-        ...recordWithoutChecksum,
-        checksum: checksum(recordWithoutChecksum),
-      };
-      await this.files.appendDurable(this.journalPath, `${JSON.stringify(record)}\n`);
-      this.state = nextState;
-      this.sequence = sequence;
+      const { event, result } = decide(this.state);
+      if (event !== undefined) await this.commit(event);
+      return result;
     });
-    this.mutationQueue = operation.catch(() => undefined);
-    return operation.then(() => this.state);
+    this.mutationQueue = operation.then(() => undefined, () => undefined);
+    return operation;
+  }
+
+  private async commit(event: StateEvent): Promise<void> {
+    const parsedEvent = stateEventSchema.parse(event) as StateEvent;
+    const nextState = reduceState(this.state, parsedEvent);
+    const sequence = this.sequence + 1;
+    const recordWithoutChecksum = { sequence, event: parsedEvent };
+    const record: JournalRecord = {
+      ...recordWithoutChecksum,
+      checksum: checksum(recordWithoutChecksum),
+    };
+    await this.files.appendDurable(this.journalPath, `${JSON.stringify(record)}\n`);
+    this.state = nextState;
+    this.sequence = sequence;
   }
 
   public async snapshot(): Promise<void> {

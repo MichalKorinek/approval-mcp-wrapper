@@ -17,6 +17,7 @@ import {
 import {
   buildTokenCatalog,
   GatewayError,
+  isValidUpstreamAlias,
   PolicyDeniedError,
   TokenScopedGateway,
   validateOrigin,
@@ -57,14 +58,37 @@ describe('token-scoped catalog', () => {
     ]);
   });
 
-  it('rejects ambiguous aliases', () => {
-    expect(() =>
-      buildTokenCatalog(
-        tokenA,
-        [{ ...tools[0]!, upstreamAlias: 'bad__alias' }],
-        new Map([[tokenA, new Set(['bad__alias__send_message'])]]),
-      ),
-    ).toThrow('alias');
+  it('accepts only lowercase, unambiguous aliases of at most 64 characters', () => {
+    for (const alias of ['a', '0', 'jira', 'jira-cloud', 'jira_cloud', 'a-b_c-9', `a${'b'.repeat(62)}c`]) {
+      expect(isValidUpstreamAlias(alias), alias).toBe(true);
+    }
+    for (const alias of [
+      'Jira', 'jira__shadow', 'jira-', 'jira_', '-jira', '_jira', '', 'ji ra', 'jira.cloud',
+      `a${'b'.repeat(63)}c`,
+    ]) {
+      expect(isValidUpstreamAlias(alias), alias).toBe(false);
+    }
+  });
+
+  it('leaves out invalid aliases and ambiguous names without hiding other tools', () => {
+    const otherId = 'upstream-2' as UpstreamId;
+    const sources = [
+      ...tools,
+      { upstreamId: otherId, upstreamAlias: 'bad__alias', tool: { name: 'send_message', inputSchema: {} } },
+      { upstreamId: otherId, upstreamAlias: 'Jira', tool: { name: 'search', inputSchema: {} } },
+      { upstreamId: otherId, upstreamAlias: 'jira-', tool: { name: 'search', inputSchema: {} } },
+      // Two upstreams stored with the same alias: neither may claim the name.
+      { upstreamId, upstreamAlias: 'dup', tool: { name: 'read', inputSchema: {} } },
+      { upstreamId: otherId, upstreamAlias: 'dup', tool: { name: 'read', inputSchema: {} } },
+    ];
+    const visible = new Map([[tokenA, new Set([
+      'signal__send_message', 'signal__list_groups', 'bad__alias__send_message',
+      'Jira__search', 'jira-__search', 'jira__search', 'dup__read',
+    ])]]);
+    expect(buildTokenCatalog(tokenA, sources, visible).map((item) => item.name)).toEqual([
+      'signal__list_groups',
+      'signal__send_message',
+    ]);
   });
 
   it('adds policy and timeout guidance without replacing the upstream description', () => {

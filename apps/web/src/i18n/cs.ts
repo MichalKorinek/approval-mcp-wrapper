@@ -404,6 +404,7 @@ export const cs: Record<MessageKey, string> = {
   'setup.description': 'Lokální nástroj žádá o založení nebo změnu upstream MCP serverů. Dokud nepotvrdíte passkey, nic se nezmění.',
   'setup.requestedBy': 'POŽADAVEK OD',
   'setup.unverified': 'Jméno žadatele uvádí sám žadatel a není ověřené',
+  'setup.requestedWith': 'Klientský token',
   'setup.expiresAt': 'Požadavek vyprší',
   'setup.create': 'Založit',
   'setup.update': 'Změnit',

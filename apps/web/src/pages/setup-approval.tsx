@@ -103,6 +103,7 @@ export function SetupApproval({ requestId, csrfToken }: { requestId: string; csr
           : <>
             <div className="oauth-client">
               <div className="oauth-client-heading"><span className="oauth-client-icon"><Icon name="chip" size={22} /></span><div><small>{t('setup.requestedBy')}</small><strong>{request.source}</strong><span>{t('setup.unverified')}</span></div></div>
+              <div className="oauth-client-route"><span>{t('setup.requestedWith')}</span><code>{request.requestedWith}</code></div>
               <div className="oauth-client-route"><span>{t('setup.expiresAt')}</span><code>{formatDate(new Date(request.expiresAt))}</code></div>
             </div>
             <ul className="setup-items">

@@ -194,25 +194,61 @@ admin approves the plan with a passkey.
 
 The file is safe to commit because it holds no secrets: credentials must be
 `{ "env": "VARIABLE", "prefix"?: "..." }` references, and literal values are
-rejected. Each upstream also accepts `description`, `metadata`, and
-`allowPrivateNetwork`. Fields left out keep their current value. A
-presentation plugin is assigned in the admin UI, and setup keeps it.
+rejected. The file cannot choose the server either, so a committed file
+never decides where your credentials go. An `alias` uses lowercase letters,
+digits, hyphens and underscores, starts and ends with a letter or digit, has
+at most 64 characters and no `__`, which separates alias and tool name; the
+admin UI applies the same rule. Each upstream also accepts `description`,
+`metadata`, and `allowPrivateNetwork`. Fields left out keep their current
+value. A presentation plugin is assigned in the admin UI, and setup keeps it.
 `source` is a self-reported name and is shown as unverified.
 
-The CLI ships in the wrapper image, so the project needs nothing installed.
-From the project directory, pipe the file into the running container (named
-`approval-mcp` in the quick start above):
+The CLI identifies itself with an MCP client token, read from
+`APPROVAL_MCP_TOKEN`. It cannot use your passkey, which works only in the
+browser, or the OAuth token an MCP client such as Claude Code keeps to
+itself, and OAuth access tokens are not accepted. The token only lets the CLI
+submit requests and follow its own requests; every change still needs your
+passkey on the approval page.
+
+Step by step:
+
+1. **Create a token.** Sign in to the web app, open **Access**, choose
+   **Generate token**, and name it, for example `setup`. Leave **Allow
+   management MCP tools** off. The token is shown only once.
+2. **Keep it away from tools it does not need.** A token without assigned
+   profiles uses the default profile. If the token should reach no tools,
+   assign it a profile that has no rules in **Agent profiles**. Setup works
+   either way.
+3. **Store it outside the repository.** On macOS, save it once in the
+   Keychain (the command asks for the value without echoing it) and read it
+   from there:
+
+   ```bash
+   security add-generic-password -a "$USER" -s approval-mcp-setup -w
+   export APPROVAL_MCP_TOKEN=$(security find-generic-password -a "$USER" -s approval-mcp-setup -w)
+   ```
+
+   Elsewhere, type it without echo: `read -rs APPROVAL_MCP_TOKEN && export APPROVAL_MCP_TOKEN`
+   (in zsh, `read -rs "APPROVAL_MCP_TOKEN?Token: "`).
+4. **Run the CLI.** It ships in the wrapper image, so the project needs
+   nothing installed. From the project directory, pipe the file into the
+   running container (named `approval-mcp` in the quick start above).
+   `-e VARIABLE` without a value copies the variable from your shell, so the
+   token appears neither in the command nor in `docker inspect`:
+
+   ```bash
+   docker exec -i -e APPROVAL_MCP_TOKEN approval-mcp approval-mcp-setup < .approval-mcp.json
+   ```
+
+5. **Approve.** Open the link the CLI prints, check the plan and the token
+   name shown as the requester, and confirm with your passkey. The CLI
+   reports the result.
+
+Pass referenced credential variables the same way, or leave them out and
+enter the `Authorization` value on the approval page:
 
 ```bash
-docker exec -i approval-mcp approval-mcp-setup < .approval-mcp.json
-```
-
-Pass referenced variables from your shell with `-e` (no value copies it from
-the host), or leave them out and enter the `Authorization` value on the
-approval page:
-
-```bash
-docker exec -i -e JIRA_MCP_TOKEN approval-mcp approval-mcp-setup < .approval-mcp.json
+docker exec -i -e APPROVAL_MCP_TOKEN -e JIRA_MCP_TOKEN approval-mcp approval-mcp-setup < .approval-mcp.json
 ```
 
 Inside the container the CLI calls the server's `APPROVAL_MCP_PUBLIC_URL`,
@@ -225,9 +261,10 @@ up to date, and `1` otherwise.
 
 Without Docker, run the same CLI from a checkout of this repository:
 `node scripts/approval-mcp-setup.mjs [--file .approval-mcp.json] [--server URL] [--timeout seconds]`.
-The server address is taken from `--server`, then `APPROVAL_MCP_URL`, then
-an optional `server` field in the file, and defaults to
-`http://localhost:3000`.
+The server address is taken from `--server`, then `APPROVAL_MCP_URL`, and
+defaults to `http://localhost:3000`. The CLI never follows redirects, because
+a redirect would resend the request with its credentials to another address;
+point it at the final address instead.
 
 The flow:
 
@@ -235,8 +272,9 @@ The flow:
    declaration. If everything already matches, it exits immediately, so
    repeated runs do nothing.
 2. Otherwise it prints an approval link. Sign in to the web app and open it to
-   review every value that will be stored. Changed values are marked, and an
-   address change also shows the address it replaces.
+   review every value that will be stored and the client token that asked for
+   it. Changed values are marked, and an address change also shows the
+   address it replaces.
 3. If the `Authorization` variable is not set, the CLI asks for that credential on
    the approval page instead. The page only collects the `Authorization`
    header, so the CLI refuses to submit an upstream with custom `headers`
@@ -246,25 +284,33 @@ The flow:
 Safety rules:
 
 - Upstreams are matched by alias. A repeated declaration never creates a
-  duplicate, and an alias used by two existing upstreams is rejected.
+  duplicate, and an alias used by two existing upstreams is rejected. Admin
+  creates and renames to an alias another upstream already uses fail with
+  `409 upstream.alias_conflict`.
 - Nothing is deleted. Upstreams missing from the declaration stay as they are.
 - Stored credentials never move to a changed URL. They are removed, or the
   approval page asks for new ones when the declaration requires them.
-- Approval is bound to the plan that was shown. If the upstreams changed in
-  the meantime, approval fails and the request is dropped; run the CLI again.
-- Pending requests are kept in memory only, expire after 15 minutes, and at
-  most 10 can be pending. Credentials of a request that is never approved
-  never reach the disk, and a server restart drops pending requests. Approved
-  credentials are stored encrypted like any other upstream credentials.
-  Credentials are never returned by any endpoint or printed by the CLI.
+- Approval is bound to the plan that was shown and to its request. A pending
+  request never changes: only an identical submission reuses it, and any
+  other input, including different credentials, becomes a new request with
+  its own approval. The plan is recomputed and written in one step with every
+  other upstream change, so if the upstreams changed in the meantime,
+  approval fails and the request is dropped; run the CLI again. Admin edits
+  based on a version that setup replaced fail the same way.
+- The requester sees only the alias and action of each upstream. Stored
+  values (names, metadata, ids, credential state) are shown only on the
+  admin's approval page.
+- Pending requests are kept in memory only and expire after 15 minutes. Each
+  client token can hold at most 3, and an identical resubmission (for example
+  a retried CLI run) reuses its pending request, so one requester cannot block
+  the others. Credentials of a request that is never approved never reach the
+  disk, and a server restart drops pending requests. Approved credentials are
+  stored encrypted like any other upstream credentials. Credentials are never
+  returned by any endpoint or printed by the CLI.
 - Changed upstreams are marked with the requesting `source` (`managedBy`).
 
 New upstreams expose no tools until you add rules in **Access → Profiles**.
 Profile rules are not part of the declaration yet.
-
-The submit endpoint (`POST /api/setup/requests`) is unauthenticated by design
-so that a local tool can call it. Keep the server on loopback or behind HTTPS.
-Every change still requires the admin's passkey.
 
 ## Run locally without Docker
 

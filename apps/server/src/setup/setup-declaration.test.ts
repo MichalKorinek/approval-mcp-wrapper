@@ -61,6 +61,17 @@ describe('parseSetupDeclaration', () => {
     ] });
     rejects({ source: 'a', upstreams: Array.from({ length: 21 }, (_, index) => ({ alias: `u${index}`, url: 'https://example.com/mcp' })) });
   });
+
+  it('accepts only aliases the gateway can expose', () => {
+    const declare = (alias: string) =>
+      parseSetupDeclaration({ source: 'a', upstreams: [{ alias, url: 'https://example.com/mcp' }] });
+    for (const alias of ['Jira', 'jira__shadow', 'jira-', 'jira_', '-jira', `a${'b'.repeat(63)}c`]) {
+      expect(() => declare(alias), alias).toThrow(SetupError);
+    }
+    for (const alias of ['a', '9', 'jira-cloud', 'jira_cloud', `a${'b'.repeat(62)}c`]) {
+      expect(declare(alias).upstreams[0]?.alias).toBe(alias);
+    }
+  });
 });
 
 describe('parseCredentials', () => {

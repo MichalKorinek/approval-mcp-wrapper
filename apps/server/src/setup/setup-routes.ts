@@ -5,7 +5,7 @@ import { authorizeAdmin } from '../admin/authorization.js';
 import type { AuthPasskeyService } from '../auth-routes.js';
 import type { SessionService } from '../session-store.js';
 import { SetupError } from './setup-error.js';
-import type { SetupService } from './setup-service.js';
+import type { SetupRequester, SetupService } from './setup-service.js';
 
 const MAX_SETUP_BODY_BYTES = 64 * 1024;
 
@@ -21,6 +21,8 @@ function frameworkError(error: unknown): SetupError {
   return new SetupError('server.internal_error', 500);
 }
 
+const BEARER = /^Bearer\s+(\S+)$/i;
+
 function requestId(request: FastifyRequest): string {
   return (request.params as { id: string }).id;
 }
@@ -31,9 +33,19 @@ export async function registerSetupRoutes(
     setup: SetupService;
     passkeys: AuthPasskeyService;
     sessions: SessionService;
+    /** Resolves an MCP client token (Access → Tokens) to the requester it identifies. */
+    authenticateRequester(token: string): Promise<SetupRequester | undefined>;
   },
 ): Promise<void> {
   const { setup } = options;
+
+  /** Setup requests are tied to the client token they were submitted with. */
+  async function requester(request: FastifyRequest): Promise<SetupRequester> {
+    const token = BEARER.exec(request.headers.authorization ?? '')?.[1];
+    const found = token === undefined ? undefined : await options.authenticateRequester(token);
+    if (found === undefined) throw new SetupError('auth.token_required', 401);
+    return found;
+  }
 
   // Encapsulated so the error handler and the no-store hook apply to setup routes only,
   // including errors Fastify raises before a handler runs.
@@ -60,12 +72,12 @@ export async function registerSetupRoutes(
       if (!contentType.toLowerCase().startsWith('application/json')) {
         throw new SetupError('input.unsupported_media_type', 415);
       }
-      const result = await setup.submit(request.body);
+      const result = await setup.submit(request.body, await requester(request));
       return reply.code(result.status === 'unchanged' ? 200 : 202).send(result);
     });
 
     scope.get('/api/setup/requests/:id/status', async (request) =>
-      setup.status(requestId(request)));
+      setup.status(requestId(request), await requester(request)));
 
     scope.get('/api/setup/requests/:id', async (request, reply) => {
       if (!await authorizeAdmin(request, reply, options.sessions, false)) return reply;

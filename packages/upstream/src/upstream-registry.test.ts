@@ -228,3 +228,64 @@ describe('UpstreamRegistry', () => {
     });
   });
 });
+
+describe('UpstreamRegistry reconfiguration', () => {
+  /** Connections that remember their URL; the first close() waits until released. */
+  function trackedFactory() {
+    const calls: string[] = [];
+    let releaseClose = () => {};
+    const heldClose = new Promise<void>((resolve) => { releaseClose = resolve; });
+    let closes = 0;
+    const factory: McpConnectionFactory = {
+      connect: vi.fn(async ({ url }: { url: URL }) => ({
+        listTools: vi.fn().mockResolvedValue({ tools: [{ name: 'tool', inputSchema: {} }] }),
+        callTool: vi.fn(async () => { calls.push(url.href); return {}; }),
+        readResource: vi.fn(),
+        close: vi.fn(() => (closes++ === 0 ? heldClose : Promise.resolve())),
+      }) as McpConnection),
+    };
+    return { factory, calls, releaseClose };
+  }
+
+  const at = (url: string): Upstream => ({ ...upstream(), url });
+
+  it('keeps the newest stored configuration when an older reconfiguration finishes last', async () => {
+    const { factory, calls, releaseClose } = trackedFactory();
+    let stored = [at('https://original.example.test/mcp')];
+    const registry = new UpstreamRegistry({ upstreams: stored, connectionFactory: factory });
+    await registry.refresh(upstreamId);
+
+    // Setup stores URL A; its registry update waits on close().
+    stored = [at('https://a.example.test/mcp')];
+    const setupUpdate = registry.syncUpstreams(() => stored);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    // The admin stores URL B and updates the registry while the first update still waits.
+    stored = [at('https://b.example.test/mcp')];
+    const adminUpdate = registry.syncUpstreams(() => stored);
+    // Give the admin update every chance to finish before the held close() returns.
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    releaseClose();
+    await Promise.all([setupUpdate, adminUpdate]);
+
+    await registry.call({ upstreamId, toolName: 'tool' });
+    expect(calls).toEqual(['https://b.example.test/mcp']);
+  });
+
+  it('never sends a call to the replaced endpoint while old connections close', async () => {
+    const { factory, calls, releaseClose } = trackedFactory();
+    const registry = new UpstreamRegistry({
+      upstreams: [at('https://old.example.test/mcp')],
+      connectionFactory: factory,
+    });
+    await registry.refresh(upstreamId);
+
+    const update = registry.syncUpstreams(() => [at('https://new.example.test/mcp')]);
+    // Let the reconfiguration start and block on closing the old connection.
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    await registry.call({ upstreamId, toolName: 'tool' });
+    releaseClose();
+    await update;
+
+    expect(calls).toEqual(['https://new.example.test/mcp']);
+  });
+});

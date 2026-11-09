@@ -1,3 +1,4 @@
+import { isValidUpstreamAlias } from '@approval-mcp/gateway';
 import type { UpstreamCredentials } from '@approval-mcp/upstream';
 
 import {
@@ -15,7 +16,6 @@ const MAX_SOURCE_LENGTH = 120;
 const MAX_URL_LENGTH = 2_048;
 const MAX_CREDENTIAL_VALUE_LENGTH = 8_192;
 const MAX_CREDENTIAL_HEADERS = 20;
-const ALIAS_PATTERN = /^[a-zA-Z0-9][a-zA-Z0-9_-]{0,63}$/;
 const HEADER_NAME_PATTERN = /^[A-Za-z0-9!#$%&'*+.^_`|~-]{1,128}$/;
 const FORBIDDEN_HEADER_NAMES = new Set([
   'authorization', 'connection', 'content-length', 'content-type', 'host',
@@ -116,7 +116,7 @@ function parseUpstream(value: unknown): SetupUpstreamDeclaration {
   const input = plainObject(value);
   if (Object.keys(input).some((key) => !UPSTREAM_KEYS.has(key))) invalid();
   const alias = input['alias'];
-  if (typeof alias !== 'string' || !ALIAS_PATTERN.test(alias) || alias === SELF_UPSTREAM_ALIAS) {
+  if (typeof alias !== 'string' || !isValidUpstreamAlias(alias) || alias === SELF_UPSTREAM_ALIAS) {
     invalid();
   }
   const displayName = optionalText(input['displayName'], MAX_DISPLAY_NAME_LENGTH);

@@ -7,7 +7,8 @@ import type {
 } from '@approval-mcp/contracts';
 import type { CredentialVault, UpstreamCredentials } from '@approval-mcp/upstream';
 import type { ToolCatalog } from '@approval-mcp/upstream';
-import type { ConfigStateStore } from '@approval-mcp/state-store';
+import { isValidUpstreamAlias } from '@approval-mcp/gateway';
+import type { ConfigState, ConfigStateStore } from '@approval-mcp/state-store';
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 
 import type { SessionService } from '../session-store.js';
@@ -45,6 +46,24 @@ function publicUpstream(record: Upstream) {
       : { pluginVersion: record.pluginVersion }),
     ...(record.managedBy === undefined ? {} : { managedBy: record.managedBy }),
   };
+}
+
+/** Whether an upstream other than `exceptId` already uses `alias`. */
+function aliasTaken(state: Readonly<ConfigState>, alias: string, exceptId?: string): boolean {
+  return Object.values(state.upstreams).some((value) => {
+    const upstream = value as unknown as Upstream;
+    return upstream.alias === alias && upstream.id !== exceptId;
+  });
+}
+
+function aliasConflict(request: FastifyRequest, reply: FastifyReply) {
+  return reply.code(409).send({
+    error: {
+      code: 'upstream.alias_conflict',
+      message: 'Another upstream already uses this alias',
+      requestId: request.id,
+    },
+  });
 }
 
 function conflict(request: FastifyRequest, reply: FastifyReply) {
@@ -182,6 +201,7 @@ export async function registerUpstreamRoutes(
     const metadata = upstreamMetadata(body.metadata);
     if (
       typeof body.alias !== 'string' ||
+      !isValidUpstreamAlias(body.alias) ||
       body.alias === SELF_UPSTREAM_ALIAS ||
       typeof body.url !== 'string' ||
       typeof body.allowPrivateNetwork !== 'boolean' ||
@@ -233,12 +253,20 @@ export async function registerUpstreamRoutes(
               (() => { throw new Error('Credential vault is unavailable'); })(),
           }),
     };
-    await options.state.mutate({
-      type: 'record.upserted',
-      collection: 'upstreams',
-      id,
-      value: record as unknown as JsonValue,
-    });
+    // Checked in the same step of the state queue as the write, so a concurrent
+    // write (another admin, declarative setup) cannot add the alias in between.
+    const created = await options.state.transact((state) => aliasTaken(state, record.alias)
+      ? { result: false }
+      : {
+          event: {
+            type: 'record.upserted',
+            collection: 'upstreams',
+            id,
+            value: record as unknown as JsonValue,
+          },
+          result: true,
+        });
+    if (!created) return aliasConflict(request, reply);
     await options.onUpstreamsChanged?.();
     reply.code(201);
     return publicUpstream(record);
@@ -259,13 +287,6 @@ export async function registerUpstreamRoutes(
       description?: unknown;
       metadata?: unknown;
     };
-    const current = options.state.read((state) => state.upstreams[id]);
-    if (current === undefined) {
-      reply.code(404);
-      return { error: { code: 'upstream.not_found', message: 'Upstream not found', requestId: request.id } };
-    }
-    const record = current as unknown as Upstream;
-    if (body.version !== record.version) return conflict(request, reply);
     const displayName = optionalText(
       body.displayName,
       MAX_DISPLAY_NAME_LENGTH,
@@ -294,15 +315,122 @@ export async function registerUpstreamRoutes(
       body.pluginId !== undefined || body.pluginVersion !== undefined;
     const removesPlugin =
       body.pluginId === null && body.pluginVersion === null;
-    if (
-      pluginChanged &&
-      !removesPlugin &&
-      !(body.pluginId === record.pluginId && body.pluginVersion === record.pluginVersion) &&
-      !(options.getPlugins?.() ?? options.plugins)?.some(
-        (plugin) =>
-          plugin.id === body.pluginId && plugin.version === body.pluginVersion,
-      )
-    ) {
+    // The version check and the write run in one step of the state queue, so a
+    // concurrent write (another admin, declarative setup) cannot be overwritten.
+    const outcome = await options.state.transact<
+      | { kind: 'not_found' }
+      | { kind: 'conflict' }
+      | { kind: 'invalid_pin' }
+      | { kind: 'alias_conflict' }
+      | { kind: 'invalid_alias' }
+      | { kind: 'updated'; record: Upstream }
+    >((state) => {
+      if (!Object.hasOwn(state.upstreams, id)) return { result: { kind: 'not_found' } };
+      const record = state.upstreams[id] as unknown as Upstream;
+      if (body.version !== record.version) return { result: { kind: 'conflict' } };
+      // A new alias must be valid and unused. Keeping the current alias is always
+      // allowed, so an upstream stored before validation can still be edited
+      // and renamed to a valid alias.
+      if (typeof body.alias === 'string' && body.alias !== record.alias) {
+        if (!isValidUpstreamAlias(body.alias)) return { result: { kind: 'invalid_alias' } };
+        if (aliasTaken(state, body.alias, record.id)) return { result: { kind: 'alias_conflict' } };
+      }
+      if (
+        pluginChanged &&
+        !removesPlugin &&
+        !(body.pluginId === record.pluginId && body.pluginVersion === record.pluginVersion) &&
+        !(options.getPlugins?.() ?? options.plugins)?.some(
+          (plugin) =>
+            plugin.id === body.pluginId && plugin.version === body.pluginVersion,
+        )
+      ) {
+        return { result: { kind: 'invalid_pin' } };
+      }
+      let updated: Upstream = {
+        ...record,
+        ...(typeof body.alias === 'string' ? { alias: body.alias } : {}),
+        ...(typeof body.url === 'string' ? { url: new URL(body.url).href } : {}),
+        ...(typeof body.allowPrivateNetwork === 'boolean'
+          ? { allowPrivateNetwork: body.allowPrivateNetwork }
+          : {}),
+        updatedAt: new Date().toISOString(),
+        version: record.version + 1,
+      };
+      if (body.displayName !== undefined) {
+        if (displayName === undefined) {
+          const { displayName: _removed, ...withoutDisplayName } = updated;
+          updated = withoutDisplayName;
+        } else {
+          updated = { ...updated, displayName };
+        }
+      }
+      if (body.description !== undefined) {
+        if (description === undefined) {
+          const { description: _removed, ...withoutDescription } = updated;
+          updated = withoutDescription;
+        } else {
+          updated = { ...updated, description };
+        }
+      }
+      if (body.metadata !== undefined) {
+        if (metadata === undefined) {
+          const { metadata: _removed, ...withoutMetadata } = updated;
+          updated = withoutMetadata;
+        } else {
+          updated = { ...updated, metadata };
+        }
+      }
+      if (removesPlugin) {
+        const {
+          pluginId: _removedPluginId,
+          pluginVersion: _removedPluginVersion,
+          ...withoutPlugin
+        } = updated;
+        updated = withoutPlugin;
+      } else if (
+        typeof body.pluginId === 'string' &&
+        typeof body.pluginVersion === 'string'
+      ) {
+        updated = {
+          ...updated,
+          pluginId: body.pluginId,
+          pluginVersion: body.pluginVersion,
+        };
+      }
+      if (body.credentials === null) {
+        const { credentials: _removed, ...withoutCredentials } = updated;
+        updated = withoutCredentials;
+      } else if (body.credentials !== undefined) {
+        updated = {
+          ...updated,
+          credentials:
+            options.credentialVault?.encrypt(record.id, body.credentials) ??
+            (() => {
+              throw new Error('Credential vault is unavailable');
+            })(),
+        };
+      }
+      return {
+        event: {
+          type: 'record.upserted',
+          collection: 'upstreams',
+          id,
+          value: updated as unknown as JsonValue,
+        },
+        result: { kind: 'updated', record: updated },
+      };
+    });
+    if (outcome.kind === 'not_found') {
+      reply.code(404);
+      return { error: { code: 'upstream.not_found', message: 'Upstream not found', requestId: request.id } };
+    }
+    if (outcome.kind === 'conflict') return conflict(request, reply);
+    if (outcome.kind === 'alias_conflict') return aliasConflict(request, reply);
+    if (outcome.kind === 'invalid_alias') {
+      reply.code(400);
+      return { error: { code: 'input.invalid', message: 'Invalid upstream alias', requestId: request.id } };
+    }
+    if (outcome.kind === 'invalid_pin') {
       reply.code(400);
       return {
         error: {
@@ -312,109 +440,51 @@ export async function registerUpstreamRoutes(
         },
       };
     }
-    let updated: Upstream = {
-      ...record,
-      ...(typeof body.alias === 'string' ? { alias: body.alias } : {}),
-      ...(typeof body.url === 'string' ? { url: new URL(body.url).href } : {}),
-      ...(typeof body.allowPrivateNetwork === 'boolean'
-        ? { allowPrivateNetwork: body.allowPrivateNetwork }
-        : {}),
-      updatedAt: new Date().toISOString(),
-      version: record.version + 1,
-    };
-    if (body.displayName !== undefined) {
-      if (displayName === undefined) {
-        const { displayName: _removed, ...withoutDisplayName } = updated;
-        updated = withoutDisplayName;
-      } else {
-        updated = { ...updated, displayName };
-      }
-    }
-    if (body.description !== undefined) {
-      if (description === undefined) {
-        const { description: _removed, ...withoutDescription } = updated;
-        updated = withoutDescription;
-      } else {
-        updated = { ...updated, description };
-      }
-    }
-    if (body.metadata !== undefined) {
-      if (metadata === undefined) {
-        const { metadata: _removed, ...withoutMetadata } = updated;
-        updated = withoutMetadata;
-      } else {
-        updated = { ...updated, metadata };
-      }
-    }
-    if (removesPlugin) {
-      const {
-        pluginId: _removedPluginId,
-        pluginVersion: _removedPluginVersion,
-        ...withoutPlugin
-      } = updated;
-      updated = withoutPlugin;
-    } else if (
-      typeof body.pluginId === 'string' &&
-      typeof body.pluginVersion === 'string'
-    ) {
-      updated = {
-        ...updated,
-        pluginId: body.pluginId,
-        pluginVersion: body.pluginVersion,
-      };
-    }
-    if (body.credentials === null) {
-      const { credentials: _removed, ...withoutCredentials } = updated;
-      updated = withoutCredentials;
-    } else if (body.credentials !== undefined) {
-      updated = {
-        ...updated,
-        credentials:
-          options.credentialVault?.encrypt(record.id, body.credentials) ??
-          (() => {
-            throw new Error('Credential vault is unavailable');
-          })(),
-      };
-    }
-    await options.state.mutate({
-      type: 'record.upserted',
-      collection: 'upstreams',
-      id,
-      value: updated as unknown as JsonValue,
-    });
     await options.onUpstreamsChanged?.();
-    return publicUpstream(updated);
+    return publicUpstream(outcome.record);
   });
 
   app.delete('/api/admin/upstreams/:id', async (request, reply) => {
     if (!await authorizeAdmin(request, reply, options.sessions, true)) return;
     const { id } = request.params as { id: string };
     const body = request.body as { version?: unknown };
-    const deletion = options.state.read((state) => {
-      const current = state.upstreams[id];
-      if (current === undefined) return undefined;
-      const record = current as unknown as Upstream;
-      const policyIds = Object.entries(state.policies)
-        .filter(
-          ([, value]) =>
-            (value as { upstreamId?: unknown }).upstreamId === id,
-        )
-        .map(([policyId]) => policyId);
-      const grantIds = Object.entries(state.grants)
-        .filter(
-          ([, value]) =>
-            (value as { upstreamId?: unknown }).upstreamId === id,
-        )
-        .map(([grantId]) => grantId);
-      const profileRuleIds = Object.entries(state.profileRules)
-        .filter(
-          ([, value]) =>
-            (value as { upstreamId?: unknown }).upstreamId === id,
-        )
-        .map(([profileRuleId]) => profileRuleId);
-      return { record, policyIds, grantIds, profileRuleIds };
+    const outcome = await options.state.transact<'deleted' | 'not_found' | 'conflict'>((state) => {
+      if (!Object.hasOwn(state.upstreams, id)) return { result: 'not_found' };
+      const record = state.upstreams[id] as unknown as Upstream;
+      if (body.version !== record.version) return { result: 'conflict' };
+      const idsReferencing = (collection: Record<string, unknown>) => Object.entries(collection)
+        .filter(([, value]) => (value as { upstreamId?: unknown }).upstreamId === id)
+        .map(([recordId]) => recordId);
+      return {
+        event: {
+          type: 'records.batch',
+          operations: [
+            ...idsReferencing(state.grants).map((grantId) => ({
+              type: 'record.deleted' as const,
+              collection: 'grants' as const,
+              id: grantId,
+            })),
+            ...idsReferencing(state.policies).map((policyId) => ({
+              type: 'record.deleted' as const,
+              collection: 'policies' as const,
+              id: policyId,
+            })),
+            ...idsReferencing(state.profileRules).map((profileRuleId) => ({
+              type: 'record.deleted' as const,
+              collection: 'profileRules' as const,
+              id: profileRuleId,
+            })),
+            {
+              type: 'record.deleted',
+              collection: 'upstreams',
+              id,
+            },
+          ],
+        },
+        result: 'deleted',
+      };
     });
-    if (deletion === undefined) {
+    if (outcome === 'not_found') {
       reply.code(404);
       return {
         error: {
@@ -424,34 +494,7 @@ export async function registerUpstreamRoutes(
         },
       };
     }
-    if (body.version !== deletion.record.version) {
-      return conflict(request, reply);
-    }
-    await options.state.mutate({
-      type: 'records.batch',
-      operations: [
-        ...deletion.grantIds.map((grantId) => ({
-          type: 'record.deleted' as const,
-          collection: 'grants' as const,
-          id: grantId,
-        })),
-        ...deletion.policyIds.map((policyId) => ({
-          type: 'record.deleted' as const,
-          collection: 'policies' as const,
-          id: policyId,
-        })),
-        ...deletion.profileRuleIds.map((profileRuleId) => ({
-          type: 'record.deleted' as const,
-          collection: 'profileRules' as const,
-          id: profileRuleId,
-        })),
-        {
-          type: 'record.deleted',
-          collection: 'upstreams',
-          id,
-        },
-      ],
-    });
+    if (outcome === 'conflict') return conflict(request, reply);
     await options.onUpstreamsChanged?.();
     return reply.code(204).send();
   });

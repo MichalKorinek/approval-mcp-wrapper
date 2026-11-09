@@ -1,7 +1,8 @@
 #!/usr/bin/env node
 // Submits a declarative upstream setup request to Approval MCP and waits for the
-// operator's passkey approval. Credentials are read from environment variables and
-// are never printed.
+// operator's passkey approval. The request is authenticated with an MCP client
+// token from APPROVAL_MCP_TOKEN. Credentials are read from environment variables,
+// and neither they nor the token are ever printed.
 //
 // The wrapper image ships this script as `approval-mcp-setup`, so a project can run
 //   docker exec -i <container> approval-mcp-setup < .approval-mcp.json
@@ -28,6 +29,11 @@ function credentialRef(value, label) {
   return value;
 }
 
+/** fetch() with `redirect: 'error'` rejects with this cause when a server redirects. */
+function isRedirectError(error) {
+  return /redirect/i.test(String(error?.cause?.message ?? ''));
+}
+
 function resolveRef(ref, env) {
   const value = env[ref.env];
   return value === undefined || value === '' ? undefined : `${ref.prefix ?? ''}${value}`;
@@ -42,6 +48,10 @@ export function buildRequest(text, env) {
   }
   if (typeof file !== 'object' || file === null || !Array.isArray(file.upstreams)) {
     throw new Error('the declaration file needs an "upstreams" array');
+  }
+  if (Object.hasOwn(file, 'server')) {
+    // A committed file must not decide where credentials from your environment go.
+    throw new Error('the declaration file cannot choose the server; use --server or APPROVAL_MCP_URL');
   }
   if (typeof file.source !== 'string' || file.source.trim() === '') {
     throw new Error('the declaration file needs a "source" name');
@@ -88,7 +98,6 @@ export function buildRequest(text, env) {
     return { ...rest, credentials: resolved };
   });
   return {
-    server: typeof file.server === 'string' ? file.server : undefined,
     body: { source: file.source.trim(), upstreams },
     awaitingCredentials,
   };
@@ -125,26 +134,39 @@ export async function runSetup({
     log(`${PREFIX} ${error instanceof Error ? error.message : 'cannot read the declaration file'}`);
     return 1;
   }
-  const base = (server ?? env.APPROVAL_MCP_URL ?? request.server ?? DEFAULT_SERVER).replace(/\/+$/, '');
+  const token = env.APPROVAL_MCP_TOKEN;
+  if (token === undefined || token === '') {
+    log(`${PREFIX} set APPROVAL_MCP_TOKEN to an MCP client token (Access → Tokens)`);
+    return 1;
+  }
+  const authorization = { authorization: `Bearer ${token}` };
+  const declaredUrl = new Map(request.body.upstreams.map((item) => [item.alias, item.url]));
+  const base = (server ?? env.APPROVAL_MCP_URL ?? DEFAULT_SERVER).replace(/\/+$/, '');
   // One deadline bounds everything, including a server that accepts the
   // connection but never answers.
   const deadline = now() + timeoutMs;
   const remaining = () => Math.max(0, deadline - now());
+  // Redirects are never followed: a 307/308 would resend the body, including
+  // upstream credentials, to whatever origin the response names.
   const timed = (url, init = {}) => fetchImpl(url, {
     ...init,
+    redirect: 'error',
     signal: AbortSignal.timeout(Math.max(1, remaining())),
   });
+  const refusedRedirect = () =>
+    log(`${PREFIX} ${base} answered with a redirect, which is refused so nothing is sent elsewhere; point --server or APPROVAL_MCP_URL at the final address`);
   let response;
   let result;
   try {
     response = await timed(`${base}/api/setup/requests`, {
       method: 'POST',
-      headers: { 'content-type': 'application/json' },
+      headers: { ...authorization, 'content-type': 'application/json' },
       body: JSON.stringify(request.body),
     });
     result = await response.json().catch(() => ({}));
-  } catch {
-    log(`${PREFIX} cannot reach ${base}`);
+  } catch (error) {
+    if (isRedirectError(error)) refusedRedirect();
+    else log(`${PREFIX} cannot reach ${base}`);
     return 1;
   }
   if (!response.ok) {
@@ -152,16 +174,14 @@ export async function runSetup({
     return 1;
   }
   for (const item of result.items ?? []) {
-    log(`  ${String(item.action).padEnd(9)} ${item.alias}  ${item.desired?.url ?? ''}`);
+    log(`  ${String(item.action).padEnd(9)} ${item.alias}  ${declaredUrl.get(item.alias) ?? ''}`);
   }
   if (result.status === 'unchanged') {
     log(`${PREFIX} upstreams are up to date`);
     return 0;
   }
-  for (const item of result.items ?? []) {
-    if (item.credentials === 'required') {
-      log(`${PREFIX} enter the Authorization value for "${item.alias}" on the approval page`);
-    }
+  for (const alias of request.awaitingCredentials) {
+    log(`${PREFIX} the approval page asks for the Authorization value of "${alias}" when it needs one`);
   }
   log(`${PREFIX} approve the changes at ${result.approvalUrl}`);
   while (remaining() > 0) {
@@ -169,14 +189,20 @@ export async function runSetup({
     if (remaining() === 0) break;
     let status;
     try {
-      const poll = await timed(`${base}/api/setup/requests/${encodeURIComponent(result.requestId)}/status`);
+      const poll = await timed(`${base}/api/setup/requests/${encodeURIComponent(result.requestId)}/status`, {
+        headers: authorization,
+      });
       if (poll.status === 404) {
         log(`${PREFIX} the request expired or no longer exists; run the setup again`);
         return 1;
       }
       if (!poll.ok) continue;
       status = (await poll.json()).status;
-    } catch {
+    } catch (error) {
+      if (isRedirectError(error)) {
+        refusedRedirect();
+        return 1;
+      }
       continue;
     }
     if (status === 'applied') {

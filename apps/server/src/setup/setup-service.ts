@@ -1,4 +1,4 @@
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 
 import type {
   EncryptedCredentialEnvelope,
@@ -17,6 +17,7 @@ import {
 } from './setup-declaration.js';
 import { SetupError } from './setup-error.js';
 import {
+  canonicalJson,
   computeSetupPlan,
   type DesiredUpstream,
   type SetupAction,
@@ -25,11 +26,28 @@ import {
 } from './setup-plan.js';
 
 export const SETUP_REQUEST_LIFETIME_MS = 15 * 60_000;
-export const MAX_PENDING_SETUP_REQUESTS = 10;
+/** Pending requests one client token may hold, so no requester can block the others. */
+export const MAX_PENDING_SETUP_REQUESTS_PER_TOKEN = 3;
 /** How long a decided request stays readable, so a polling CLI sees the outcome. */
 export const DECIDED_SETUP_RETENTION_MS = 5 * 60_000;
 
 export type SetupRequestStatus = 'pending' | 'applied' | 'denied';
+
+/** The client token a request was submitted with. */
+export interface SetupRequester {
+  id: string;
+  label: string;
+}
+
+/**
+ * What the requester sees about one upstream. Values inherited from the stored
+ * upstream (display name, metadata, ids, credential state) appear only in the
+ * admin's approval view.
+ */
+export interface SetupItemSummary {
+  alias: string;
+  action: SetupAction;
+}
 
 export interface SetupResult {
   alias: string;
@@ -43,6 +61,7 @@ export type PendingPlanItem = SetupPlanItem & { previousUrl?: string };
 export interface PendingSetupRequest {
   id: string;
   source: string;
+  requestedWith: string;
   createdAt: string;
   expiresAt: string;
   planDigest: string;
@@ -55,6 +74,12 @@ export interface PendingSetupRequest {
  */
 interface SetupRequest {
   id: string;
+  requester: SetupRequester;
+  /**
+   * SHA-256 of the complete submitted input, credentials included. A pending
+   * request never changes; only an identical submission may reuse it.
+   */
+  inputDigest: string;
   status: SetupRequestStatus;
   createdAt: Date;
   /** Approval deadline while pending; removal time once decided. */
@@ -66,14 +91,13 @@ interface SetupRequest {
 }
 
 export type SubmitResult =
-  | { status: 'unchanged'; items: SetupPlanItem[] }
+  | { status: 'unchanged'; items: SetupItemSummary[] }
   | {
       status: 'pending';
       requestId: string;
       approvalUrl: string;
       expiresAt: string;
-      planDigest: string;
-      items: SetupPlanItem[];
+      items: SetupItemSummary[];
     };
 
 export interface SetupServiceOptions {
@@ -84,8 +108,24 @@ export interface SetupServiceOptions {
   now?: () => Date;
 }
 
+/**
+ * What the admin's approval is bound to: the plan they reviewed and the request
+ * it belongs to. A request never changes, and different credentials always make
+ * a new request, so a digest shown for one request cannot approve another one
+ * that carries the same plan with other secrets.
+ */
+function approvalDigest(request: { id: string; plan: SetupPlan }): string {
+  return createHash('sha256')
+    .update(canonicalJson({ requestId: request.id, planDigest: request.plan.digest }))
+    .digest('hex');
+}
+
 function upstreamsOf(state: Readonly<ConfigState>): Upstream[] {
   return Object.values(state.upstreams).map((value) => value as unknown as Upstream);
+}
+
+function summary(items: readonly { alias: string; action: SetupAction }[]): SetupItemSummary[] {
+  return items.map(({ alias, action }) => ({ alias, action }));
 }
 
 function buildUpstream(input: {
@@ -136,13 +176,13 @@ export class SetupService {
     return run;
   }
 
-  #plan(declaration: SetupDeclaration): SetupPlan {
-    return this.#options.state.read((state) => computeSetupPlan(declaration, {
+  #plan(declaration: SetupDeclaration, state: Readonly<ConfigState>): SetupPlan {
+    return computeSetupPlan(declaration, {
       upstreams: upstreamsOf(state),
       readCredentials: (upstream) => upstream.credentials === undefined
         ? undefined
         : this.#options.credentialVault.decrypt(upstream.id, upstream.credentials),
-    }));
+    });
   }
 
   #prune(): void {
@@ -172,48 +212,70 @@ export class SetupService {
     if (results !== undefined) request.results = results;
   }
 
-  submit(input: unknown): Promise<SubmitResult> {
+  #pendingResult(request: SetupRequest): SubmitResult {
+    return {
+      status: 'pending',
+      requestId: request.id,
+      approvalUrl: `${this.#options.publicOrigin}/setup/requests/${request.id}`,
+      expiresAt: request.expiresAt.toISOString(),
+      items: summary(request.plan.items),
+    };
+  }
+
+  submit(input: unknown, requester: SetupRequester): Promise<SubmitResult> {
     const declaration = parseSetupDeclaration(input);
     return this.#serialize(async () => {
-      const plan = this.#plan(declaration);
+      const plan = this.#options.state.read((state) => this.#plan(declaration, state));
       if (plan.items.every((item) => item.action === 'unchanged')) {
-        return { status: 'unchanged', items: plan.items };
+        return { status: 'unchanged', items: summary(plan.items) };
       }
       this.#prune();
-      const pending = [...this.#requests.values()].filter((request) => request.status === 'pending');
-      if (pending.length >= MAX_PENDING_SETUP_REQUESTS) {
+      const own = [...this.#requests.values()].filter((request) =>
+        request.status === 'pending' && request.requester.id === requester.id);
+      const now = this.#now();
+      const expiresAt = new Date(now.getTime() + SETUP_REQUEST_LIFETIME_MS);
+      // Submitting exactly the same input again (for example a retried CLI run)
+      // reuses its pending request instead of taking another slot. Any other
+      // input, including different credentials, becomes a new request, so the
+      // content behind a request the admin reviewed never changes.
+      const inputDigest = createHash('sha256').update(canonicalJson(declaration)).digest('hex');
+      const repeated = own.find((request) =>
+        request.inputDigest === inputDigest && request.plan.digest === plan.digest);
+      if (repeated !== undefined) return this.#pendingResult(repeated);
+      if (own.length >= MAX_PENDING_SETUP_REQUESTS_PER_TOKEN) {
         throw new SetupError('setup.too_many_pending', 429);
       }
-      const now = this.#now();
       const request: SetupRequest = {
         id: randomUUID(),
+        requester,
+        inputDigest,
         status: 'pending',
         createdAt: now,
-        expiresAt: new Date(now.getTime() + SETUP_REQUEST_LIFETIME_MS),
+        expiresAt,
         declaration,
         plan,
       };
       this.#requests.set(request.id, request);
-      return {
-        status: 'pending',
-        requestId: request.id,
-        approvalUrl: `${this.#options.publicOrigin}/setup/requests/${request.id}`,
-        expiresAt: request.expiresAt.toISOString(),
-        planDigest: plan.digest,
-        items: plan.items,
-      };
+      return this.#pendingResult(request);
     });
   }
 
-  status(id: string): { status: SetupRequestStatus; items: SetupPlanItem[]; results?: SetupResult[] } {
+  /** Progress for the requester; other tokens cannot see that the request exists. */
+  status(id: string, requester: SetupRequester): {
+    status: SetupRequestStatus;
+    items: SetupItemSummary[];
+    results?: SetupItemSummary[];
+  } {
     const request = this.#get(id);
+    if (request.requester.id !== requester.id) throw new SetupError('setup.request_not_found', 404);
     return {
       status: request.status,
-      items: request.plan.items,
-      ...(request.results === undefined ? {} : { results: request.results }),
+      items: summary(request.plan.items),
+      ...(request.results === undefined ? {} : { results: summary(request.results) }),
     };
   }
 
+  /** The full plan for the admin's approval page. */
   pending(id: string): PendingSetupRequest {
     const request = this.#pending(id);
     const stored = this.#options.state.read((state) =>
@@ -221,9 +283,10 @@ export class SetupService {
     return {
       id: request.id,
       source: request.declaration.source,
+      requestedWith: request.requester.label,
       createdAt: request.createdAt.toISOString(),
       expiresAt: request.expiresAt.toISOString(),
-      planDigest: request.plan.digest,
+      planDigest: approvalDigest(request),
       items: request.plan.items.map((item) => {
         const previousUrl = item.changes.includes('url') && item.upstreamId !== undefined
           ? stored.get(item.upstreamId)?.url
@@ -253,16 +316,17 @@ export class SetupService {
 
   #applyOperations(
     request: SetupRequest,
+    plan: SetupPlan,
     entered: ReadonlyMap<string, UpstreamCredentials>,
+    state: Readonly<ConfigState>,
   ): { operations: StateOperation[]; results: SetupResult[] } {
     const vault = this.#options.credentialVault;
     const now = this.#now().toISOString();
-    const existing = this.#options.state.read((state) =>
-      new Map(upstreamsOf(state).map((upstream) => [upstream.id as string, upstream])));
+    const existing = new Map(upstreamsOf(state).map((upstream) => [upstream.id as string, upstream]));
     const declared = new Map(request.declaration.upstreams.map((item) => [item.alias, item]));
     const operations: StateOperation[] = [];
     const results: SetupResult[] = [];
-    for (const item of request.plan.items) {
+    for (const item of plan.items) {
       if (item.action === 'unchanged') {
         results.push({ alias: item.alias, action: 'unchanged', upstreamId: item.upstreamId ?? '' });
         continue;
@@ -305,29 +369,36 @@ export class SetupService {
   ): Promise<{ status: 'applied'; results: SetupResult[] }> {
     return this.#serialize(async () => {
       const request = this.#pending(id);
-      if (input.planDigest !== request.plan.digest) {
+      if (input.planDigest !== approvalDigest(request)) {
         throw new SetupError('setup.plan_mismatch', 409);
       }
       const entered = this.#enteredCredentials(request.plan, input.credentials);
-      // Upstreams may have changed since submission (for example by hand in the admin UI).
-      // A different plan means the operator approved something else, so start over.
-      let current: SetupPlan | undefined;
-      try {
-        current = this.#plan(request.declaration);
-      } catch (error) {
-        if (!(error instanceof SetupError)) throw error;
-      }
-      if (current?.digest !== request.plan.digest) {
+      // The plan is recomputed and written in one step of the state queue, so a
+      // concurrent change (for example an admin edit) either lands before it and
+      // makes the plan stale, or lands after it and fails its own version check.
+      const outcome = await this.#options.state.transact<
+        { kind: 'stale' } | { kind: 'applied'; results: SetupResult[] }
+      >((state) => {
+        let current: SetupPlan | undefined;
+        try {
+          current = this.#plan(request.declaration, state);
+        } catch (error) {
+          if (!(error instanceof SetupError)) throw error;
+        }
+        if (current?.digest !== request.plan.digest) return { result: { kind: 'stale' } };
+        const { operations, results } = this.#applyOperations(request, current, entered, state);
+        return {
+          ...(operations.length === 0 ? {} : { event: { type: 'records.batch', operations } }),
+          result: { kind: 'applied', results },
+        };
+      });
+      if (outcome.kind === 'stale') {
         this.#requests.delete(id);
         throw new SetupError('setup.plan_stale', 409);
       }
-      const { operations, results } = this.#applyOperations(request, entered);
-      if (operations.length > 0) {
-        await this.#options.state.mutate({ type: 'records.batch', operations });
-      }
-      this.#decide(request, 'applied', results);
+      this.#decide(request, 'applied', outcome.results);
       await this.#options.onUpstreamsChanged?.();
-      return { status: 'applied', results };
+      return { status: 'applied', results: outcome.results };
     });
   }
 

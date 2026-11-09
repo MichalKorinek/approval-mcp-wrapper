@@ -28,6 +28,8 @@ export interface SetupPlanItem {
 export interface SetupRequestView {
   id: string;
   source: string;
+  /** Label of the client token the request was submitted with (verified). */
+  requestedWith: string;
   createdAt: string;
   expiresAt: string;
   planDigest: string;

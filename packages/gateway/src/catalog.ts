@@ -1,7 +1,7 @@
 import type { ClientTokenId, UpstreamId } from '@approval-mcp/contracts';
 import type { McpTool } from '@approval-mcp/upstream';
 
-import { publicToolName } from './tool-name.js';
+import { safePublicToolName } from './tool-name.js';
 
 export interface CatalogSourceTool {
   upstreamId: UpstreamId;
@@ -46,12 +46,18 @@ export function buildTokenCatalog(
   visibility: TokenVisibility,
 ): readonly PublicTool[] {
   const visible = visibility.get(tokenId) ?? new Set<string>();
-  const names = new Set<string>();
+  // A stored upstream with an invalid alias, or tools that would share a public
+  // name, must not take the catalog of the other upstreams down. They are left
+  // out, never exposed under a substitute name, and so cannot be called either.
+  const counts = new Map<string, number>();
+  for (const source of sourceTools) {
+    const name = safePublicToolName(source.upstreamAlias, source.tool.name);
+    if (name !== undefined) counts.set(name, (counts.get(name) ?? 0) + 1);
+  }
   const catalog: PublicTool[] = [];
   for (const source of sourceTools) {
-    const name = publicToolName(source.upstreamAlias, source.tool.name);
-    if (names.has(name)) throw new Error(`Duplicate public tool name: ${name}`);
-    names.add(name);
+    const name = safePublicToolName(source.upstreamAlias, source.tool.name);
+    if (name === undefined || counts.get(name) !== 1) continue;
     if (!visible.has(name)) continue;
     catalog.push({
       ...source.tool,
